@@ -1,0 +1,233 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Push a plugin or theme to an UpdatePulse Server through its Package API.
+ *
+ * This is the client side of the ingestion loop: a site (or a build step)
+ * publishes a package upward using its own scoped API key, with no filesystem
+ * or sudo access to the server. It is used by `mum-sandbox publish` today, and
+ * is the basis of the push-based ingestion agent (see PLAN.md, phase 6).
+ *
+ * Usage:
+ *   mum-push --server URL --key-id ID --key SECRET [--type plugin|theme] <dir|zip>
+ */
+
+$options = array(
+	'server' => null,
+	'key-id' => null,
+	'key'    => null,
+	'type'   => null,
+);
+$source = null;
+
+$args = array_slice( $argv, 1 );
+
+while ( $args ) {
+	$arg = array_shift( $args );
+
+	if ( '--' === substr( $arg, 0, 2 ) ) {
+		$name = substr( $arg, 2 );
+
+		if ( ! array_key_exists( $name, $options ) ) {
+			fail( "unknown option --$name" );
+		}
+
+		$options[ $name ] = array_shift( $args );
+	} else {
+		$source = $arg;
+	}
+}
+
+foreach ( array( 'server', 'key-id', 'key' ) as $required ) {
+	if ( empty( $options[ $required ] ) ) {
+		fail( "missing --$required" );
+	}
+}
+
+if ( ! $source ) {
+	fail( 'missing package directory or zip file' );
+}
+
+$server = rtrim( $options['server'], '/' );
+$source = rtrim( $source, '/' );
+
+if ( ! file_exists( $source ) ) {
+	fail( "no such file or directory: $source" );
+}
+
+$slug     = basename( $source, '.zip' );
+$zip      = is_dir( $source ) ? build_zip( $source, $slug ) : $source;
+$type     = $options['type'] ? $options['type'] : detect_type( $source );
+$version  = read_version( $source );
+
+info( sprintf( 'pushing %s%s as %s', $slug, $version ? " $version" : '', $type ) );
+
+$token = get_token( $server, $options['key-id'], $options['key'] );
+
+// The API refuses to overwrite through `add`, so upload new packages with
+// `add` and existing ones with `edit`.
+$result = upload( $server, $token, 'add', $slug, $type, $zip );
+
+if ( isset( $result['code'] ) && 'package_exists' === $result['code'] ) {
+	info( 'package already exists, updating it' );
+	$result = upload( $server, $token, 'edit', $slug, $type, $zip );
+}
+
+if ( is_dir( $source ) ) {
+	unlink( $zip );
+}
+
+if ( isset( $result['code'] ) ) {
+	fail( sprintf( '%s: %s', $result['code'], $result['message'] ) );
+}
+
+done( sprintf( '%s %s published to %s', $slug, isset( $result['version'] ) ? $result['version'] : '', $server ) );
+
+/**
+ * Acquire a reusable token for the package API.
+ *
+ * The private key never travels: it signs a timestamped payload, and the
+ * server matches that signature against the key it holds for this key id.
+ */
+function get_token( $server, $key_id, $key ) {
+	$timestamp = time();
+	$payload   = array( 'api' => 'package' );
+	$str       = base64_encode( $key_id . json_encode( $payload, JSON_NUMERIC_CHECK ) );
+	$time_key  = hash_hmac( 'sha256', $timestamp, $key, true );
+	$signature = hash_hmac( 'sha256', $str, $time_key );
+
+	$response = request(
+		$server . '/updatepulse-server-token/',
+		$payload,
+		array(
+			'X-UpdatePulse-API-Credentials: ' . $timestamp . '|' . $key_id,
+			'X-UpdatePulse-API-Signature: ' . $signature,
+		)
+	);
+
+	if ( empty( $response['nonce'] ) ) {
+		fail( 'could not acquire a token: ' . json_encode( $response ) );
+	}
+
+	return $response['nonce'];
+}
+
+function upload( $server, $token, $action, $slug, $type, $zip ) {
+	return request(
+		$server . '/updatepulse-server-package-api/',
+		array(
+			'action'     => $action,
+			'package_id' => $slug,
+			'type'       => $type,
+			'api_token'  => $token,
+			'file'       => new CURLFile( $zip, 'application/zip', basename( $zip ) ),
+		),
+		array( 'File-Hash: ' . hash_file( 'sha256', $zip ) )
+	);
+}
+
+/**
+ * POST to the server. Private API actions are rejected when their parameters
+ * are passed in the query string, so everything travels as form fields.
+ */
+function request( $url, $fields, $headers ) {
+	$curl = curl_init();
+
+	curl_setopt_array(
+		$curl,
+		array(
+			CURLOPT_URL            => $url,
+			CURLOPT_POST           => true,
+			CURLOPT_POSTFIELDS     => $fields,
+			CURLOPT_HTTPHEADER     => $headers,
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_TIMEOUT        => 120,
+		)
+	);
+
+	// Local sandbox sites use a locally-trusted mkcert CA that PHP's bundle
+	// does not know about; anything else must validate normally.
+	if ( preg_match( '@^https://[^/]+\.test(/|$)@', $url ) ) {
+		curl_setopt( $curl, CURLOPT_SSL_VERIFYPEER, false );
+	}
+
+	$body  = curl_exec( $curl );
+	$error = curl_error( $curl );
+
+	curl_close( $curl );
+
+	if ( $error ) {
+		fail( "request to $url failed: $error" );
+	}
+
+	$decoded = json_decode( $body, true );
+
+	if ( null === $decoded ) {
+		fail( "unexpected response from $url: " . substr( $body, 0, 200 ) );
+	}
+
+	return $decoded;
+}
+
+function build_zip( $dir, $slug ) {
+	$path    = realpath( $dir );
+	$archive = sys_get_temp_dir() . '/' . $slug . '-' . getmypid() . '.zip';
+	$zip     = new ZipArchive();
+
+	if ( true !== $zip->open( $archive, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
+		fail( "could not create an archive for $dir" );
+	}
+
+	$files = new RecursiveIteratorIterator(
+		new RecursiveDirectoryIterator( $path, FilesystemIterator::SKIP_DOTS )
+	);
+
+	foreach ( $files as $file ) {
+		$relative = substr( $file->getPathname(), strlen( $path ) + 1 );
+
+		// Version control and build leftovers have no place in a package.
+		if ( preg_match( '@(^|/)(\.git|node_modules|\.DS_Store)(/|$)@', $relative ) ) {
+			continue;
+		}
+
+		// The archive must contain the package in a folder named after its slug.
+		$zip->addFile( $file->getPathname(), $slug . '/' . $relative );
+	}
+
+	if ( ! $zip->close() ) {
+		fail( "could not write an archive for $dir" );
+	}
+
+	return $archive;
+}
+
+function detect_type( $source ) {
+	return is_dir( $source ) && file_exists( $source . '/style.css' ) ? 'theme' : 'plugin';
+}
+
+function read_version( $source ) {
+	if ( ! is_dir( $source ) ) {
+		return null;
+	}
+
+	foreach ( glob( $source . '/*.php' ) as $file ) {
+		if ( preg_match( '/^[ \t\/*#@]*Version:\s*(.+)$/mi', file_get_contents( $file ), $matches ) ) {
+			return trim( $matches[1] );
+		}
+	}
+
+	return null;
+}
+
+function info( $message ) {
+	fwrite( STDERR, "\033[1;33mmum-push:\033[0m $message\n" );
+}
+
+function done( $message ) {
+	fwrite( STDERR, "\033[0;32mmum-push:\033[0m $message\n" );
+}
+
+function fail( $message ) {
+	fwrite( STDERR, "\033[1;31mmum-push:\033[0m $message\n" );
+	exit( 1 );
+}
