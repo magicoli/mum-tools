@@ -12,6 +12,14 @@ CACHE=/tmp/$PGM.cache
 # Ajouter les chemins nécessaires au PATH
 export PATH=/opt/magic/bin:$BINDIR:$PATH
 
+. $(which wp-helpers) || exit 1
+
+# Preferences may override the defaults above (e.g. packages_folder)
+for prefs in /etc/$PGM ~/etc/$PGM ~/.$PGM
+do
+    [ -f "$prefs" ] && . "$prefs"
+done
+
 date > $CACHE.beenthere
 
 # Fonction de log
@@ -89,7 +97,7 @@ do
             pkg_version=$(unzip -p $package $main_file | grep "Version:" | head -1 | awk -F ':' '{print $2}' | xargs echo)
         fi
         
-        if [ "$(printf '%s\n' "$pkg_version" "$version" | sort -V | head -n1)" = "$version" ]; then
+        if [ "$(compare_versions "$pkg_version" "$version")" != "<" ]; then
             # log "$slug up to date ($pkg_version >= $version)"
             continue
         fi
