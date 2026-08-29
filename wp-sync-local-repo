@@ -1,0 +1,363 @@
+#!/bin/bash
+
+# list-local-websites -x | grep wordpress | while read user url path f
+# do
+# 	echo "# $url"
+# 	cd $path && sudo -u $user /opt/magic/bin/wp-sync-local-repo -y
+# done
+
+# for server in $(servers)
+# do
+# 	echo "# $server"
+# 	ssh $server "/opt/magic/bin/list-local-websites -x | grep wordpress | while read f f path f; do cd $path && /opt/magic/bin/wp-sync-local-repo -Y; done"
+# done
+
+DEBUG=no
+DIRECTION=get
+DEFAULT_REPO=/opt/wpsync
+
+PGM=$(basename "$0")
+TMP=/tmp/$PGM.$$
+
+OPTSINHELPER=no
+export PATH=$PATH:$(dirname $0)
+. $(which wp-helpers) || exit 1
+
+which wp >/dev/null
+[ $? -ne 0 ] && end 1 "missing wp client, install from https://wp-cli.org/#installing"
+
+which git >/dev/null
+[ $? -ne 0 ] && end 1 "missing git client, install with sudo apt install git"
+
+who=$(whoami)
+whoami | grep -q "^root$" && ISROOT=true && end 1 should not run as root, exiting
+sudo -nv 2>/dev/null || SUDO_GID="no_sudo"
+
+for prefs in /etc/$PGM ~/etc/$PGM ~/.$PGM
+do
+	#	echo $prefs
+	[ -f "$prefs" ] && log "  reading $prefs" && . "$prefs"
+done
+
+OPTS="alyYgGsSnhvq"
+USAGE="$PGM [-a] [-lyYgGsSnhvq] [web folder] repository"
+STARTWD=$PWD
+
+HELP="$(usage)
+
+	-g  get (now default,  repo to web folder)
+	-G  get and answer yes to updates from repo
+	-S  answer yes to updates to repo
+	-s  send (reverse direction, web folder to repo)
+	-m  make this site source for repo
+	-a  process all local wordpress sites
+	-y  answer yes to all repo syncs
+  -h  help
+  -q  quiet
+  -v  verbose"
+
+while getopts $OPTS PARAM
+do
+	case $PARAM in
+	"?")
+	    ERROR=1
+	    ;;
+	a)
+		ALL=yes
+		break;
+		;;
+	l)
+		PROCEED=list
+		;;
+	g)
+		DIRECTION=get
+		;;
+	G)
+		DIRECTION=get
+		PROCEED=get
+		;;
+	s)
+		DIRECTION=send
+		;;
+	S)
+		DIRECTION=send
+		PROCEED=send
+		;;
+	m)
+		DIRECTION=makesource
+		;;
+	n)
+		DIRECTION=new
+		;;
+	u)
+		action=update
+		;;
+	n)
+		dryrun="-n"
+		DEBUG=yes
+		;;
+	y)
+		PROCEED=all
+		;;
+	Y)
+		PROCEED=all
+		;;
+	h)
+		help; end
+		;;
+	-)
+	    case $OPTARG in
+		help)
+		    help; end
+		    ;;
+		*)
+		    printf "$PGM: illegal option -- $OPTARG"
+#		    ERROR=1
+	    esac
+	    ;;
+	q)
+		unset DEBUG
+		;;
+	v)
+		DEBUG=yes
+		;;
+	*)
+		VALUES="$VALUES $PARAM"
+		LASTVAL=$PARAM
+	esac
+done 2>/dev/null
+
+[ $ERROR ] && end $ERROR "$(usage)
+    type '$PGM --help' for more info"
+
+if [ "$ALL" = "yes" ]
+then
+	params=$(echo " $@ " | sed -e "s/ -a / /" -e "s/ -a\([[:alnum:]]\)/ -\\1/" -e "s/ -\([[:alnum:]]\)a\([[:alnum:]]*\)/ -\\1\\2/")
+	list-local-websites -w | while read user url path f
+	do
+		echo "# $url" | GREP_COLORS='ms=01;33' grep --color ".*"
+		cd $path && echo " $PWD" || continue
+		if [ "$user" = "$who" ]
+		then
+			$0 $params
+		else
+			sudo -u $user $0 $params
+		fi
+		[ $? -eq 0 ] && echo "  $url updated" | GREP_COLORS='ms=01;32' grep --color ".*"
+	done
+	exit
+fi
+
+shift `expr $OPTIND - 1`
+
+[ $2 ] && startfolder="$1" && shift || startfolder=$(realpath .)
+cd "$startfolder" || end $? startfolder $startfolder is not valid
+
+[ $1 ] && repository="$(realpath "$1")" \
+|| [ -d "$DEFAULT_REPO" ] && repository="$DEFAULT_REPO" \
+|| { usage; end 2 missing repository; }
+
+[ -d "$repository" ] || end $? repository $repository is not valid
+
+if [ "$PROCEED" = "list" ]
+then
+	cd "$repository" 2>/dev/null # && continue
+	for folder in */
+	do
+		cd "$repository/$folder"
+		# echo $folder
+		if [ "$1" ]
+		then
+			for expr in "$@"
+			do
+					ls -1d */*$expr* 2>/dev/null
+			done
+		else
+			ls -1d */* 2>/dev/null
+		fi | while read plugin
+		do
+			# echo "$plugin" | cut -d / -f 2 | sed "s/^/\t/"
+			vrep=$(wpgetversion $repository/$folder$plugin)
+			echo "$folder$plugin ($vrep)"
+		done
+	done
+
+	end list processed
+fi
+
+webfolder=$(
+	dirname $(wp plugin path 2>/dev/null) 2>/dev/null  \
+	|| pwd | grep "/wp-content" \
+	|| find -name "wp-content" | head -1
+)
+[ "$webfolder" ] || end $1 cannot wp path
+webfolder=$(realpath "$webfolder")
+# end webfolder $webfolder
+log web folder $webfolder
+log repository $repository
+log direction $DIRECTION
+
+myself=$(whoami)
+cd $repository || end $? could not cd to $repository
+dirowner=$(stat -c '%U' $PWD)
+if [ "$dirowner" = "$myself" ]
+then
+	log Pulling last changes from git repository
+	git pull -q && log "$PWD pulled" && git push -q && log "$PWD pushed" || end $? error pulling last updates from $repository
+fi
+cd $webfolder || end $? could not cd to $webfolder
+dirowner=$(stat -c '%U' $PWD)
+log Try to fetch last updates
+if [ "$dirowner" = "$myself" ]
+then
+	wp plugin update --all
+	wp theme update --all
+elif [ ! "$SUDO_GID" ]
+then
+	log 1 "i am not running as sudo, so I can sudo for wp updates"
+	sudo -u $dirowner -c wp plugin update --all
+	sudo -u $dirowner -c wp theme update --all
+fi
+
+executesync() {
+	[ "$3" ] && vsrc=$3
+	[ "$4" ] && vdst=$4
+	rsync -nWai --delete $srcfolder/ $dstfolder/ --exclude .git > $TMP.dryrun || return
+	cat $TMP.dryrun | grep -q . || return
+	touch "$dstfolder/.check" 2>/dev/null && rm "$dstfolder/.check" 2>/dev/null
+	[ $? -ne 0 ] && log "No write access to $dstfolder, skipping $srcfolder" && return
+	echo "  sync $srcfolder ($vsrc)"
+	echo "    to $dstfolder ($vdst)"
+	echo "       ($(cat $TMP.dryrun | wc -l) changes)"
+	if [ "$PROCEED" = "all" ] \
+	|| [ "$direction" = "get" -a "$PROCEED" != "get" ] \
+	|| [ "$direction" = "send" -a "$PROCEED" != "send" ]
+	then
+		log "automatic $PROCEED proceed"
+	else
+		yesno -y "Proceed sync?" && log "$folder processing" || { echo "  $folder Skipped"; return; }
+	fi
+	rsync -Wavz --delete $srcfolder/ $dstfolder/  --exclude .git > $TMP.sync
+	return $?
+}
+
+for folder in $(ls -d plugins/* themes/*)
+do
+	plugin=$(basename "$folder")
+	pluginname=$(wpgetname "$folder")
+	[ "$pluginname" ] || pluginname=$plugin
+
+	repfolder="$repository/$folder"
+	if [ ! -d "$repfolder" ]
+	then
+		ls -d "$repository"/*/"$folder" 2>/dev/null > $TMP.dest
+		cat $TMP.dest | wc -l | grep -q "^1$" && repfolder=$(cat $TMP.dest) || continue
+	fi
+	if [ "$DIRECTION" = "makesource" ]
+	then
+		cat "$repfolder/.source" | grep -q "^$HOSTNAME:$webfolder/$folder$" && log "already source for $folder" && continue
+
+		cd "$repfolder" \
+		&& git pull -q && log $repfolder pulled || end $? error while pulling repo last updates \
+		&& cd $OLDPWD
+
+		cat "$repfolder/.source" "$webfolder/$folder/.source" | sort -u > $TMP.source
+		cat $TMP.source > "$webfolder/$folder/.source"
+		echo "$HOSTNAME:$webfolder/$folder" | tee -a $webfolder/$folder/.source \
+		|| if [ ! "$SUDO_GID" ]
+		then
+			log 1 "i am not running as sudo, so I can sudo for .source update"
+			owner=$(stat -c '%U' $webfolder/$folder)
+			group=$(stat -c '%U' $webfolder/$folder)
+			echo "$HOSTNAME:$webfolder/$folder" | sudo tee -a $webfolder/$folder/.source \
+			&& sudo chown $owner:$group $webfolder/$folder/.source
+		fi \
+		&& rsync $webfolder/$folder/.source $repfolder/  --exclude .git \
+		&& cd "$repfolder" \
+		&& git add .source \
+		&& git commit .source -m "$folder added source $webfolder/$folder" \
+		&& "$folder added source $HOSTNAME:$webfolder/$folder"
+		cd "$OLDPWD"
+		continue
+	fi
+
+	direction=$DIRECTION
+
+	vweb=$(wpgetversion $webfolder/$folder)
+	vrep=$(wpgetversion $repfolder)
+	if [ "$vweb" -a "$vrep" ]
+	then
+		# comparing versions only
+		if [ "$vweb" = "$vrep" ]
+		then
+			log "$(basename $folder) $vweb (identical version)"
+			continue
+		fi
+		compare_versions $vweb $vrep >/dev/null
+		if [ $? -eq 1 ]
+		then
+			# log $plugin local version $vweb greater than repo $vrep
+			direction=send
+			log "source, direction set to send"
+		else
+			# log repo version $vrep greater than local $vweb
+			direction=get
+		fi
+		log "$plugin $vweb $(compare_versions $vweb $vrep) repo $vrep"
+	else
+		# using .source to decide sync direction
+		cat "$repfolder/.source" 2>/dev/null | grep -q "^$HOSTNAME:$webfolder/$folder$" \
+		|| cat "$webfolder/$folder/.source" 2>/dev/null | grep -q "^$HOSTNAME:$webfolder/$folder$" \
+		&& direction=send \
+		&& log "source, direction set to send"
+	fi
+	# log direction: $direction
+
+	if [ "$direction" = "send" ]
+	then
+		srcfolder=$webfolder/$folder
+		dstfolder=$repfolder
+		vsrc=$vweb
+		vdst=$vrep
+	else
+		srcfolder=$repfolder
+		dstfolder=$webfolder/$folder
+		vsrc=$vrep
+		vdst=$vweb
+	fi
+
+	dstowner=$(stat -c '%U' $dstfolder)
+	if [ "$dstowner" = "$myself" ]
+	then
+		executesync "$srcfolder" "$dstfolder" "$vsrc" "$vdst" \
+		|| end $? "error during $folder sync"
+	elif [ ! "$SUDO_GID" ]
+	then
+		log "destination owner: $dstowner != $myself"
+		log 1 "i am not running as sudo, so I can sudo for sync"
+		sudo -u $dstowner executesync $srcfolder $dstfolder  \
+		|| end $? "error during $folder sync as $dstowner"
+	else
+		log -1 "should update $dstfolder ($vdst) from $srcfolder ($vsrc) but owner is $dstowner"
+	fi
+	if [ "$dstfolder" = "$repfolder" -a "$dstowner" = "$myself" ]
+	then
+		log "$pluginname updated to $vdst, updating git"
+		cd $dstfolder
+		git add . && git commit -m "$pluginname updated to $vsrc" \
+		&& git push && log "$PWD pushed"
+	fi
+	log "$folder sync succeeded"
+done
+
+cd "$STARTWD" || end $?
+if [ "$dirowner" = "$myself" ]
+then
+	pwd
+	wp language core update \
+	&& wp language plugin update --all
+else
+	echo "root: $PWD"
+	sudo -u $dirowner -c wp language core update \
+	&& sudo -u $dirowner -c wp language plugin update --all
+fi

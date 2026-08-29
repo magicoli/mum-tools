@@ -1,0 +1,302 @@
+#!/bin/bash
+
+DEBUG=no
+EXCLUDE="/no exclude$"
+
+OPTS="acdepruwxhHvq"
+USAGE=$(echo $PGM $PAR $PAROPT "[<args>]" | sed "s/  / /g")
+HELP="  -a  all hosts (local and remote servers)
+  -c  check active websites
+  -e  extended output with known types
+
+  -d  drupal sites
+      -r  check reports (drupal only)
+      -u  check updates (drupal only)
+
+  -w  wordpress sites
+      -p  show active plugins (wordpress only)
+"
+OPTSINHELPER=yes
+
+FULLCMD="$(dirname $0)/$(basename $0) $@"
+# host=$(hostname)
+
+export PATH=$PATH:$(dirname "$0")
+. $(which wp-helpers || exit 1) || exit 1
+
+# USAGE="check-website [-pruwxhvq]"
+# PAR=`echo $OPTS|sed 's/.://g'|grep -v "^$"|sed "s/\([a-zA-Z0-9]*\)/[-\\1]/g" `
+# PAROPT=`echo $OPTS | sed "s/-://" | sed 's/\(.\)/\\1\//g' \
+#     | sed 's/\(.\)\/:\//[-\\1 <value>] /g' \
+#     | sed "s/.\///g" `
+
+while getopts $OPTS PARAM
+  do
+    case $PARAM in
+	"?")
+	    ERROR=1
+	    ;;
+	-)
+	    case $OPTARG in
+		help|verbose|quiet)
+		    # help; end
+		    ;;
+		*)
+		    printf "$PGM: illegal option -- $OPTARG"
+#		    ERROR=1
+	    esac
+	    ;;
+  a)
+    REMOTECHECK=yes
+    ;;
+  c)
+    CHECK=yes
+    ;;
+	d)
+	    FILTER=yes
+	    DRUPAL=yes
+	    ;;
+  w)
+	    FILTER=yes
+	    WORDPRESS=yes
+	    ;;
+  e)
+	    EXTENDEDVIEW=yes
+	    ;;
+	r)
+	    CHECKREPORTS=yes
+	    ;;
+	u)
+	    CHECKUPDATES=yes
+	    ;;
+	x)
+	    EXCLUDE=$OPTARG
+	    ;;
+  p)
+      FILTER=yes
+      WORDPRESS=yes
+      SHOWPLUGINS=true
+      ;;
+  H)
+      host="@$(hostname)"
+      ;;
+	h)
+	    help; end
+	    ;;
+  h|q|v)
+      ;;
+	*)
+	    VALUES="$VALUES $PARAM"
+	    LASTVAL=$PARAM
+    esac
+
+done 2>/dev/null
+
+[ $ERROR ] && end $ERROR "$(usage)
+    type '$PGM --help' for more info"
+
+shift `expr $OPTIND - 1`
+
+default_domain() {
+  path=$1
+  log looking uri for $path
+  if [ -f $path/wp-config.php ]
+  then
+    log use wp to get siteurl
+    cd $path
+    # table_prefix=$(wp config get table_prefix) \
+    wpfastconfig 2>/dev/null
+    [ "$siteurl" ] && echo $siteurl && return
+  fi
+  domain=$(egrep -h -B 1000 "^[[:blank:]]*DocumentRoot[[:blank:]]*$path[[:blank:]]*$" /etc/apache2/sites-enabled/* /etc/apache2/other/* 2>/dev/null | egrep "^[[:blank:]]*ServerName|^[[:blank:]]*DocumentRoot[[:blank:]]*$path[[:blank:]]*$" | egrep "^[[:blank:]]*ServerName" | sed "s/.*ServerName *//" | head -1)
+  [ ! "$domain" ] && domain=$(echo "$path" | grep "/domains/" | sed "s|.*/domains/||" | cut -d "/" -f 1)
+  [ ! "$domain" ] && domain=$(hostname --long)
+  [ ! "$domain" ] && domain=localhost
+  confs=$(egrep -l "^[[:blank:]]*DocumentRoot[[:blank:]]*$path[[:blank:]]*$" /etc/apache2/sites-enabled/*.conf /etc/apache2/other/*.conf 2>/dev/null)
+  # egrep -l "^[[:blank:]]*DocumentRoot[[:blank:]]*$path[[:blank:]]*$" /etc/apache2/sites-enabled/*.conf /etc/apache2/other/*.conf 2>/dev/null \
+  # | xargs grep -hi "<VirtualHost " | cut -d : -f 2 | sed "s/[^0-9]//g" | grep -q 443 && protocol=https || protocol=http
+  grep -hi "<VirtualHost " $confs | cut -d : -f 2 | sed "s/[^0-9]//g" | grep -q 443 && protocol=https || protocol=http
+
+  echo "$protocol://$domain/"
+}
+
+site_owner() {
+  [ "$1" ] || return
+  confs=$(egrep -l "^[[:blank:]]*DocumentRoot[[:blank:]]*$path[[:blank:]]*$" /etc/apache2/sites-enabled/*.conf /etc/apache2/other/*.conf 2>/dev/null)
+  user=$(
+  egrep -h "^[[:blank:]]*(AssignUserID|SuexecUserGroup)" $confs | head -1  \
+  | while read f u f; do echo $u; done
+  )
+  [ ! "$user" ] && user=$(stat -c%U "$(realpath $path)")
+  [ ! "$user" ] && user=www-data
+  id=$(id $user | cut -d= -f2 | cut -d"(" -f 1)
+  [ $id -gt 1000 ] && id=99999
+  echo "$id $user"
+}
+
+docroot_has_local_apacheconf() {
+  docroot=$1
+  validhosts="^($(hostname)|$(hostname -f)|$(hostname -I | sed "s/ *$//" | tr " " ":"))\.*$"
+  log $docroot
+  (
+  grep -l $docroot /etc/apache2/sites-enabled/*conf || ( log "no apache conf"; return 1 )
+  ) | while read conf
+  do
+    log found in $conf
+    egrep "^[[:blank:]]*Server(Name|Alias)" $conf | while read f host
+    do
+      [ -f "$TMP.found" ] && break
+      log testing host $host
+      echo $host | egrep -q "$validhosts" && log "matches $host" && touch $TMP.found && break
+      dig +short $host | sed "s/\.*$//" | egrep -q "$validhosts" && log "matches $host" && touch $TMP.found && break
+    done
+    [ -f "$TMP.found" ] && break
+  done
+  [ -f "$TMP.found" ] && return 0
+  echo "NOT LOCAL"
+  return 2
+}
+
+grep -h "^[[:blank:]]*DocumentRoot" /etc/apache2/sites-enabled/* \
+    | sed "s/.*DocumentRoot *//" | egrep -v "$EXCLUDE" | sort -u  | while read path
+    do
+      log path $path
+      [ -e $path/wp-config.php -o -e $path/*/wp-config.php ] 2>/dev/null \
+      && wpath=$(ls $path/wp-config.php $path/*/wp-config.php 2>/dev/null | head -1 | xargs dirname) \
+      && echo "$(site_owner $path)$host $(default_domain $path) $wpath wordpress" \
+      && continue
+      echo "$(site_owner $path)$host $(default_domain $path) $path $(
+      ls $path/sites/*/settings.php 2>/dev/null | tail -1 | sed "s/.*/drupal/"
+      ls $path/browser.prefs $path/playlist.php 2>/dev/null | tail -1 | sed "s/.*/wrap/"
+      )"
+    done | sed "s/  *$//" | sort -n | cut -d " " -f 2- > $TMP.docroots
+
+# grep "wordpress$"
+if [ "$CHECK" = "yes" ]
+then
+  log 1 verifying active websites
+  cat $TMP.docroots | while read user url docroot meta
+  do
+    echo $user $url $docroot $meta $(docroot_has_local_apacheconf $docroot)
+  done
+  # end
+fi
+
+if [ ! "$FILTER" ]
+then
+  if [ ! "$EXTENDEDVIEW" = "yes" ]
+  then
+    cat $TMP.docroots | cut -d " " -f 3
+  else
+    cat $TMP.docroots
+  fi
+else
+  if [ "$DRUPAL" = "yes" ]
+  then
+    log "drupal websites"
+    cat $TMP.docroots | grep " drupal$" \
+    | while read owner url folder sitetype
+    do
+      ls $folder/sites/*/settings.php 2>/dev/null \
+      | sed "s|/settings.php||" \
+      | sed "s|/sites/default$||" \
+      | sort
+
+    done | sort -u > $TMP.drupal
+    if [ ! "$CHECKUPDATES" ]
+    then
+      cat $TMP.drupal
+    else
+      cat $TMP.drupal 2>/dev/null | sort -u | while read path
+      do
+        log "checking $path"
+        cd $path || continue
+        drush status -p > $TMP.drushinfo
+        . $TMP.drushinfo
+        echo "$site_uri" | grep -q "//default$" && site_uri=$(default_domain $drupal_root)
+        domain=$(echo "$site_uri" | sed "s|.*://||")
+        log "$domain"
+        drush pm-update -p > $TMP.updates 2>/dev/null
+        updates=$(cat $TMP.updates | wc -l)
+        reports=0
+        if [ "$CHECKREPORTS" ]
+        then
+          drush core-requirements -p | egrep -v "\-1$| 0$" > $TMP.reports
+          reports=$(cat $TMP.reports | wc -l)
+        fi
+        if [ $updates -gt 0 -o $reports -gt 0 ]
+        then
+          echo "$domain" > $TMP.long
+          current_path=$(echo $path | sed "s|/sites/default$||")
+          printf "\t$current_path\n" >> $TMP.long
+          printf "\tdrupal version $drupal_version\n" >> $TMP.long
+          message="$domain: $current_path, $drupal_version"
+          if [ $updates -gt 0 ]
+          then
+            [ $updates -gt 1 ] && plural=s || plural=""
+            printf "\t$updates update$plural\n" >> $TMP.long
+            message="$message, $updates update$plural"
+            security=$(grep "SECURITY-UPDATE" $TMP.updates | wc -l)
+            [ $security -gt 1 ] && plural=S || plural=
+            if [ $security -gt 0 ]
+            then
+              printf "\t$security SECURITY UPDATE$plural\n" >> $TMP.long
+              message="$message, $security SECURITY UPDATE$plural"
+            fi
+          fi
+          if [ $reports -gt 0 ]
+          then
+            [ $reports -gt 1 ] && plural=s || plural=""
+            line="$reports warning$plural"
+            printf "\t$line\n" >> $TMP.long
+            message="$message, $line"
+          fi
+          line="check $site_uri/admin/reports/status"
+          printf "\t$line\n" >> $TMP.long
+          message="$message, $line"
+
+          echo "$message" > $TMP.short
+          cat $TMP.long
+        fi
+      done
+    fi
+  fi
+  if [ "$WORDPRESS" = "yes" ]
+  then
+    log "wordpress websites"
+    if istrue $SHOWPLUGINS
+    then
+      grep " wordpress$" $TMP.docroots | while read server url wpath misc
+      do
+        # echo $server $url $wpath $misc
+        cd $wpath || continue
+        wp plugin list 2>/dev/null | grep -v "^name\s"  \
+        | while read plugin status update version update_version auto_update 
+        do
+          printf "$url\t$plugin ($version)\t$status\n"
+        done
+        # cd $wpath/wp-content/plugins && ls | sort -u | while read item
+        # do
+        #   ls $item/*.php >/dev/null 2>/dev/null && echo "  $item"
+        # done
+      done
+    else
+      grep " wordpress$" $TMP.docroots
+    fi
+  fi
+fi
+
+if istrue $REMOTECHECK
+then
+  log REMOTECHECK
+  remotecmd=$(echo "$FULLCMD " | sed -E -e "s/ -a / /g" -e  "s/ -([a-zA-Z0-9]+)a/ -\\1/g" -e "s/ -a([a-zA-Z0-9]+)/ -\\1/g")
+  for server in $(servers)
+  do
+    echo "# $server" >&2
+    ssh $server $remotecmd | sed -E "s/^([[:alpha:]]+)/  \\1@$server/"
+  done
+fi
+
+end
+
+# | grep -v /preview | sort -u | tee drupal-sites

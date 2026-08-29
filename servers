@@ -1,0 +1,138 @@
+#!/bin/bash
+
+PingTimeout=5
+ConnectTimeout=10
+
+[ "$1" = "-l" ] && LOOP=true
+
+OPTS="c:ayxhvq"
+export PATH=$PATH:$(dirname $0)
+OPTSINHELPER=yes . $(which helpers) || exit 1
+ETCDIR=$(dirname $(dirname $0))/etc
+# echo while getopts $OPTS PARAM >&2
+while getopts $OPTS PARAM
+  do
+    case $PARAM in
+	"?")
+	    ERROR=1
+	    ;;
+	-)
+	    case $OPTARG in
+		help|verbose|quiet)
+		    # help; end
+		    ;;
+		*)
+		    printf "$PGM: illegal option -- $OPTARG"
+#		    ERROR=1
+	    esac
+	    ;;
+  a)
+	    SHOWALL=yes
+	    ;;
+  c)
+      command="$OPTARG"
+      ;;
+  y)
+      AUTOCONFIRM=yes
+      ;;
+  x)
+	    EXTENDED=yes
+	    ;;
+  h|q|v)
+      ;;
+	*)
+	    VALUES="$VALUES $PARAM"
+	    LASTVAL=$PARAM
+    esac
+
+done 2>/dev/null
+
+[ $ERROR ] && end $ERROR "$(usage)
+    type '$PGM --help' for more info"
+
+shift `expr $OPTIND - 1`
+
+[ "$AUTOCONFIRM" = "yes" -a "$command" = "" ] && end 1 "parameter -y is only available with a command"
+if [ -t 1 ]
+then
+  [ "$AUTOCONFIRM" = "yes" ] && end 1 "parameter -y is only available in pipeline"
+else
+  [ "$AUTOCONFIRM" != "yes" ] && end 1 "to execute command in pipeline, pass -y parameter"
+fi
+
+if [ "$command" ]
+then
+  if [ "$AUTOCONFIRM" != "yes" ]
+  then
+    yesno "Do you want to execute \"$command\" on all servers? " || end
+  else
+    log 1 "Executing '$command' on all servers"
+  fi
+fi
+
+touch $TMP.servers
+for list in /etc/$PGM $ETCDIR/$PGM ~/etc/$PGM ~/.$PGM
+do
+	#	echo $prefs
+	[ -f "$list" ] && log "  reading $list" || continue
+  grep -v "#" $list | tr "[[:blank:]]" " " | while read server args
+  do
+    grep -q "^$server " $TMP.servers || echo $server $args >> $TMP.servers
+  done
+done
+
+# Identifiers of the current machine — skip self when running remote commands
+LOCAL_IDS="$(hostname -f) $(hostname -s) $(hostname -I)"
+
+is_local_server() {
+  local server=$1
+  local entry
+  entry=$(grep "^$server " "$TMP.servers" || true)
+  for id in $LOCAL_IDS; do
+    echo "$server $entry" | grep -qw "$id" && return 0
+  done
+  return 1
+}
+
+check_availability() {
+  host=$1
+  printf "Checking $host availability" >&2
+  if ping -c1 -W $PingTimeout $host >/dev/null 2>&1
+  then
+    printf "\r\033[K" >&2
+    return 0
+  else
+    printf "\r\033[K" >&2
+    log 1 "$host unreachable"
+    return 1
+  fi
+}
+
+if [ "$command" ]
+then
+  for server in $(grep . $TMP.servers | grep -v " alias " | cut -d " " -f 1)
+  do
+    if is_local_server "$server"; then
+      log "  skipping $server (local machine)"
+      continue
+    fi
+    echo "# $server"
+    if check_availability $server
+    then
+      exec 3>&1
+      ssh -t -o ConnectTimeout=$ConnectTimeout $server "$command" 2> >(grep -v "Connection to $server closed." >&3) || log 1 "command on $server exited with $?" | tee -a $TMP.errors
+      exec 3>&-
+      fi
+  done
+  [ -f $TMP.errors ] || end
+  count=$(cat $TMP.errors 2>&1 | wc -l)
+  log $count errors occured
+  cat $TMP.errors
+  end 1
+fi
+
+grep . $TMP.servers | while read server type args
+do
+  [ "$type" = "alias" -a ! "$SHOWALL" ] && continue
+  [ "$EXTENDED" ] && echo "$server $type $args" || echo $server
+done
