@@ -81,7 +81,9 @@ if ( isset( $result['code'] ) ) {
 	fail( sprintf( '%s: %s', $result['code'], $result['message'] ) );
 }
 
-done( sprintf( '%s %s published to %s', $slug, isset( $result['version'] ) ? $result['version'] : '', $server ) );
+// Reported from the package itself: the API answers with the metadata it had
+// cached before re-reading the archive.
+done( sprintf( '%s%s published to %s', $slug, $version ? " $version" : '', $server ) );
 
 /**
  * Acquire a reusable token for the package API.
