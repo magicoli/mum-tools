@@ -215,8 +215,8 @@ then
 elif [ ! "$SUDO_GID" ]
 then
 	log 1 "i am not running as sudo, so I can sudo for wp updates"
-	sudo -u $dirowner -c wp plugin update --all
-	sudo -u $dirowner -c wp theme update --all
+	sudo -u $dirowner wp plugin update --all
+	sudo -u $dirowner wp theme update --all
 fi
 
 executesync() {
@@ -335,7 +335,13 @@ do
 	then
 		log "destination owner: $dstowner != $myself"
 		log 1 "i am not running as sudo, so I can sudo for sync"
-		sudo -u $dstowner executesync $srcfolder $dstfolder  \
+		# executesync is a shell function: sudo spawns a fresh shell, so the
+		# function and the globals it (and log/yesno) read must be re-declared there
+		sudo -u $dstowner bash -c "
+			$(declare -f executesync log yesno)
+			$(declare -p PGM TMP LOG LOGGING DEBUG COLOR_HIGHLIGHT COLOR_NORMAL PROCEED direction folder srcfolder dstfolder 2>/dev/null)
+			executesync '$srcfolder' '$dstfolder' '$vsrc' '$vdst'
+		" \
 		|| end $? "error during $folder sync as $dstowner"
 	else
 		log -1 "should update $dstfolder ($vdst) from $srcfolder ($vsrc) but owner is $dstowner"
@@ -358,6 +364,6 @@ then
 	&& wp language plugin update --all
 else
 	echo "root: $PWD"
-	sudo -u $dirowner -c wp language core update \
-	&& sudo -u $dirowner -c wp language plugin update --all
+	sudo -u $dirowner wp language core update \
+	&& sudo -u $dirowner wp language plugin update --all
 fi
