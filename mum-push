@@ -203,8 +203,35 @@ function build_zip( $dir, $slug ) {
 	return $archive;
 }
 
+/**
+ * A theme carries a style.css next to its other files; a plugin does not.
+ */
 function detect_type( $source ) {
-	return is_dir( $source ) && file_exists( $source . '/style.css' ) ? 'theme' : 'plugin';
+	if ( is_dir( $source ) ) {
+		return file_exists( $source . '/style.css' ) ? 'theme' : 'plugin';
+	}
+
+	$zip = new ZipArchive();
+
+	if ( true !== $zip->open( $source ) ) {
+		return 'plugin';
+	}
+
+	$type = 'plugin';
+
+	for ( $i = 0; $i < $zip->numFiles; $i++ ) {
+		// Only the archive's own top-level folder counts: a plugin may well
+		// bundle a style.css deeper down.
+		if ( preg_match( '@^[^/]+/style\.css$@', $zip->getNameIndex( $i ) ) ) {
+			$type = 'theme';
+
+			break;
+		}
+	}
+
+	$zip->close();
+
+	return $type;
 }
 
 function read_version( $source ) {
