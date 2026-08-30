@@ -171,10 +171,74 @@ function request( $url, $fields, $headers ) {
 	return $decoded;
 }
 
+/**
+ * What a package says it does not distribute.
+ *
+ * The very file the wordpress.org deploy already reads, so a package reaches
+ * both channels carrying the same thing. Without it a plugin ships its own
+ * test suite and its composer dependencies to every site it updates — enough,
+ * here, to be refused by the server outright.
+ */
+function distignore( $dir ) {
+	$file = $dir . '/.distignore';
+
+	if ( ! is_readable( $file ) ) {
+		return array();
+	}
+
+	$patterns = array();
+
+	foreach ( file( $file, FILE_IGNORE_NEW_LINES ) as $line ) {
+		$line = trim( $line );
+
+		if ( '' !== $line && 0 !== strpos( $line, '#' ) ) {
+			$patterns[] = $line;
+		}
+	}
+
+	// Assets belong beside a package, never inside it: wordpress.org keeps
+	// them out of trunk, and an update server reads them from their URLs.
+	$patterns[] = '/assets/';
+
+	return $patterns;
+}
+
+function distignored( $relative, array $patterns ) {
+	$segments = explode( '/', $relative );
+
+	foreach ( $patterns as $pattern ) {
+		$anchored = 0 === strpos( $pattern, '/' );
+		$pattern  = trim( $pattern, '/' );
+
+		if ( '' === $pattern ) {
+			continue;
+		}
+
+		// A leading slash anchors: /tests/ is the package's own suite, not
+		// some library's tests/ directory further down.
+		if ( $anchored ) {
+			if ( fnmatch( $pattern, $segments[0] ) ) {
+				return true;
+			}
+
+			continue;
+		}
+
+		foreach ( $segments as $segment ) {
+			if ( fnmatch( $pattern, $segment ) ) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
 function build_zip( $dir, $slug ) {
-	$path    = realpath( $dir );
-	$archive = sys_get_temp_dir() . '/' . $slug . '-' . getmypid() . '.zip';
-	$zip     = new ZipArchive();
+	$path     = realpath( $dir );
+	$archive  = sys_get_temp_dir() . '/' . $slug . '-' . getmypid() . '.zip';
+	$patterns = distignore( $path );
+	$zip      = new ZipArchive();
 
 	if ( true !== $zip->open( $archive, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
 		fail( "could not create an archive for $dir" );
@@ -189,6 +253,10 @@ function build_zip( $dir, $slug ) {
 
 		// Version control and build leftovers have no place in a package.
 		if ( preg_match( '@(^|/)(\.git|node_modules|\.DS_Store)(/|$)@', $relative ) ) {
+			continue;
+		}
+
+		if ( distignored( $relative, $patterns ) ) {
 			continue;
 		}
 
