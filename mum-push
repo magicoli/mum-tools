@@ -196,9 +196,9 @@ function distignore( $dir ) {
 		}
 	}
 
-	// Assets belong beside a package, never inside it: wordpress.org keeps
-	// them out of trunk, and an update server reads them from their URLs.
-	$patterns[] = '/assets/';
+	// assets/ stays in: the wordpress.org deploy strips it on its way to
+	// trunk, and the package server needs it in the archive, since a package
+	// can reach that server without ever passing through here.
 
 	return $patterns;
 }
