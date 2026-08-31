@@ -317,6 +317,18 @@ function read_version( $source ) {
 		return null;
 	}
 
+	// A theme declares its version in style.css, and its PHP files may carry a
+	// bundled library's header instead — so ask the right file, not the first.
+	$stylesheet = $source . '/style.css';
+
+	if ( declares_theme( @file_get_contents( $stylesheet ) ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors
+		if ( preg_match( '/^[ \t\/*#@]*Version:\s*(.+)$/mi', file_get_contents( $stylesheet ), $matches ) ) {
+			return trim( $matches[1] );
+		}
+
+		return null;
+	}
+
 	foreach ( glob( $source . '/*.php' ) as $file ) {
 		if ( preg_match( '/^[ \t\/*#@]*Version:\s*(.+)$/mi', file_get_contents( $file ), $matches ) ) {
 			return trim( $matches[1] );
