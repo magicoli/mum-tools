@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 voice=${voice-fr4}
 evoice=mb-$voice

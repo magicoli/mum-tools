@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 ARCHIVES=/home/archives
 BINDCONF=/etc/bind/named.conf.master

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 PingTimeout=5
 ConnectTimeout=10

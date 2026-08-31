@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Définir les variables avec des chemins absolus
 packages_folder=/home/magic/packages

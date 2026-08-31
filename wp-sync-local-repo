@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # list-local-websites -x | grep wordpress | while read user url path f
 # do

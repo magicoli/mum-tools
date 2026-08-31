@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 
 dev=$(git rev-parse --show-toplevel) || exit $?
