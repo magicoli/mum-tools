@@ -12,31 +12,32 @@
  *   mum-push --server URL --key-id ID --key SECRET [--type plugin|theme] <dir|zip>
  */
 
-$options = array(
+$defaults = array(
 	'server' => null,
 	'key-id' => null,
 	'key'    => null,
 	'type'   => null,
 );
-$source = null;
 
-$args = array_slice( $argv, 1 );
+// getopt() gives the flexibility anybody expects of a command: --key-id ID and
+// --key-id=ID both, in any order, and it stops where the options do.
+$rest    = 0;
+$given   = getopt( '', array( 'server:', 'key-id:', 'key:', 'type:' ), $rest );
+$options = array_merge( $defaults, is_array( $given ) ? $given : array() );
 
-while ( $args ) {
-	$arg = array_shift( $args );
-
+// getopt() drops what it does not know without a word, and a typo that silently
+// does nothing is worse than one that stops.
+foreach ( array_slice( $argv, 1, $rest - 1 ) as $arg ) {
 	if ( '--' === substr( $arg, 0, 2 ) ) {
-		$name = substr( $arg, 2 );
+		$name = strtok( substr( $arg, 2 ), '=' );
 
-		if ( ! array_key_exists( $name, $options ) ) {
+		if ( ! array_key_exists( $name, $defaults ) ) {
 			fail( "unknown option --$name" );
 		}
-
-		$options[ $name ] = array_shift( $args );
-	} else {
-		$source = $arg;
 	}
 }
+
+$source = isset( $argv[ $rest ] ) ? $argv[ $rest ] : null;
 
 foreach ( array( 'server', 'key-id', 'key' ) as $required ) {
 	if ( empty( $options[ $required ] ) ) {
