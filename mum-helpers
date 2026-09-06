@@ -29,14 +29,26 @@ DEVDIR="${DEVDIR:-$BASEDIR/dev}"
 #   dev     kept, served however this machine serves sites, and the developer's
 #   tests   rebuilt whenever, served by PHP itself, and nobody's
 #
-# The caller says which by setting MUM_ENV before sourcing this. Everything
-# below is that one word, so the two can never be half-mixed.
+# Which one a run is about comes from the environment, MUM_ENV, the way Laravel
+# takes APP_ENV: it is what every name and path below is worked out from, so it
+# has to be known before this file is sourced rather than parsed out of the
+# arguments after. Everything below is that one word, so the two environments
+# can never be half-mixed.
+#
+#   MUM_ENV=tests dev/build-dev-sites --clean
 MUM_ENV=${MUM_ENV:-dev}
 
 case $MUM_ENV in
 	dev | tests) ;;
 	*) die "no such environment: $MUM_ENV (dev or tests)" ;;
 esac
+
+# bin/helpers loaded .env, which describes the development environment. The
+# tests one has a file of its own, and what it says wins for a run in tests.
+if [ "$MUM_ENV" = tests ] && [ -f "$BASEDIR/.env.testing" ]; then
+	# shellcheck source=/dev/null
+	source "$BASEDIR/.env.testing"
+fi
 
 # -site tells the site apart from the plugin of the same name; -dev and -tests
 # tell the environments apart. Both are needed, and neither replaces the other.
