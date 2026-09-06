@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#
+# What the dev-site scripts all need: where the sites are, what they are called,
+# and how to talk to them.
+#
+# Sourced, never run. Sharing one description of the environment is the only way
+# they stay describing the same one.
+
+# Make sure we were not launched twice
+[ -n "${MUM_HELPERS:-}" ] && return || MUM_HELPERS=$(realpath "$BASH_SOURCE")
+
+[ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" = "$0" ] && {
+	echo "$(basename "$0") is meant to be sourced, not run" >&2
+	exit 1
+}
+
+BINDIR="$(cd $(dirname $BASH_SOURCE) && pwd)"
+BASEDIR="${BASEDIR:-$(dirname "$BINDIR")}"
+DEVDIR="${DEVDIR:-$BASEDIR/dev}"
+[ -n "${BASH_HELPERS:-}" ] || source $BINDIR/helpers
+
+# bin/helpers is responsible for loading $BASEDIR/.env
+# other .env files are meant to be loaded by the scripts requiring it, not
+# by these project-wide helpers
+
+# .test is what lerd and Herd answer to; another machine serves these somewhere
+# else, and says so in .env rather than being told what its own domains are.
+MUM_SERVER_SLUG=${MUM_SERVER_SLUG:-mum-server-dev-site}
+MUM_SERVER_HOST=${MUM_SERVER_HOST:-${MUM_SERVER_SLUG}.test}
+MUM_CLIENT_SLUG=${MUM_CLIENT_SLUG:-mum-client-dev-site}
+MUM_CLIENT_HOST=${MUM_CLIENT_HOST:-${MUM_CLIENT_SLUG}.test}
+MUM_RELEASE_VERSION=${MUM_RELEASE_VERSION:-1.5}
+MUM_CLIENT_VERSION=${MUM_CLIENT_VERSION:-1.4}
+
+SERVER_DIR=$DEVDIR/$MUM_SERVER_SLUG
+CLIENT_DIR=$DEVDIR/$MUM_CLIENT_SLUG
+BUILT_DIR=$BASEDIR/plugins/mum-demo-packages/build/$MUM_SERVER_HOST
+
+# The packages carrying a licence, and what each one is. Named once: the server
+# issues the licences, the client presents them, and the two lists have to be
+# the same list.
+LICENSED_PLUGINS=(dummy-plugin-lib-license)
+LICENSED_THEMES=(dummy-theme-lib-license)
+
+# wp-cli, with whatever the caller decided about root. wp-cli refuses to run as
+# root and lerd runs its containers as root; an alias covers that in a terminal
+# and does not survive into a script, so it is asked for rather than assumed.
+allow_root=${allow_root:-}
+wp() {
+	"$BASEDIR/vendor/bin/wp" ${allow_root:+"$allow_root"} "$@"
+}
+
+# Run from inside the site directory: that is how the environment serving it
+# decides which database and which PHP the command gets.
+wp_server() {
+	cd "$SERVER_DIR" && wp --path="$SERVER_DIR" "$@"
+}
+
+wp_client() {
+	cd "$CLIENT_DIR" && wp --path="$CLIENT_DIR" "$@"
+}
