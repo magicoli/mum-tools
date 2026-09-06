@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+#
+# Copy one repository working tree onto another path, as it would be distributed.
+#
+# Its own script, because copying a source somewhere clean is a thing on its own:
+# a staging box, a colleague's install, a site being debugged, a package about to
+# be zipped. Nothing here knows what a plugin or a dev site is.
+#
+# Usage: sync_repo [options] <source> <destination>
+#
+#   <source>        the working tree to copy
+#   <destination>   where it lands, local or rsync remote -- the directory
+#                   itself, not the directory it goes into
+#
+#   --dry-run      say what would be copied, copy nothing
+#   --keep         leave files the source no longer has (no rsync --delete)
+#
+#   --quiet        less chatty
+#   --verbose      more chatty (debug mode)
+#   --help         this help
+
+set -u
+
+PGM=${PGM:-$(basename "$0")}
+BINDIR="$(cd "$(dirname "$0")" && pwd)"
+BASEDIR="${BASEDIR:-$(dirname "$BINDIR")}"
+source "$BINDIR/helpers"
+
+USAGE=$(sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^#\{1,2\} \{0,1\}//;1s/^Usage: //')
+
+dry_run=
+# --delete by default, so what is there afterwards is the source and nothing
+# else: a file deleted from the source has to disappear from the copy too, or
+# the copy runs code that no longer exists anywhere.
+delete=--delete
+OPTS="hqv"
+LONGOPTS="dry-run,keep,help,quiet,verbose"
+
+parsed_opts=$(getopt -o $OPTS -l "$LONGOPTS" -- "$@" 2>$TMP.getopt) || end $? "$USAGE $(
+	echo
+	sed "s/^getopt[\b:]*//" $TMP.getopt
+)"
+for o; do
+	case $o in
+	--dry-run)
+		dry_run=--dry-run
+		shift
+		;;
+	--keep)
+		delete=
+		shift
+		;;
+	-h | --help)
+		help
+		end
+		;;
+	-q | --quiet)
+		STDOUT="/dev/null"
+		QUIET=yes
+		DEBUG=no
+		shift
+		;;
+	-v | --verbose)
+		STDERR="&1"
+		DEBUG=yes
+		shift
+		;;
+	--)
+		shift
+		break
+		;;
+	-*)
+		die "invalid option: $o"
+		;;
+	esac
+done
+
+[ "$#" -eq 2 ] || die "$(usage)"
+
+source_dir=$1
+destination=$2
+
+[ -d "$source_dir" ] || die "no such directory: $source_dir"
+
+# What git ignores never ships, and .distignore names the rest -- vendor/,
+# composer files, the ignore files themselves. Both are read as rsync patterns,
+# which their contents happen to be; anything gitignore-specific (negations,
+# ** anchors) would not survive.
+exclude=(--exclude '.git' --exclude '.git*')
+
+for ignore in "$source_dir/.gitignore" "$source_dir/.distignore"; do
+	[ -f "$ignore" ] && exclude+=(--exclude-from "$ignore")
+done
+
+# A remote destination is rsync's business, and mkdir -p would make a local
+# directory named after it.
+case "$destination" in
+*:*) ;;
+*) mkdir -p "$(dirname "$destination")" ;;
+esac
+
+debug "rsync -a $delete $dry_run ${exclude[*]} $source_dir/ $destination/"
+
+rsync -a $delete $dry_run "${exclude[@]}" "$source_dir/" "$destination/" ||
+	die "could not copy $source_dir to $destination"
