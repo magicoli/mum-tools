@@ -23,17 +23,43 @@ DEVDIR="${DEVDIR:-$BASEDIR/dev}"
 # other .env files are meant to be loaded by the scripts requiring it, not
 # by these project-wide helpers
 
+# Two environments -- dev and tests -- with the same two sites each: a package
+# server and a managed client, which talk to each other and never across.
+#
+#   dev     kept, served however this machine serves sites, and the developer's
+#   tests   rebuilt whenever, served by PHP itself, and nobody's
+#
+# The caller says which by setting MUM_ENV before sourcing this. Everything
+# below is that one word, so the two can never be half-mixed.
+MUM_ENV=${MUM_ENV:-dev}
+
+case $MUM_ENV in
+	dev | tests) ;;
+	*) die "no such environment: $MUM_ENV (dev or tests)" ;;
+esac
+
+# -site tells the site apart from the plugin of the same name; -dev and -tests
+# tell the environments apart. Both are needed, and neither replaces the other.
+#
 # .test is what lerd and Herd answer to; another machine serves these somewhere
 # else, and says so in .env rather than being told what its own domains are.
-MUM_SERVER_SLUG=${MUM_SERVER_SLUG:-mum-server-dev-site}
+MUM_SERVER_SLUG=${MUM_SERVER_SLUG:-mum-server-$MUM_ENV-site}
 MUM_SERVER_HOST=${MUM_SERVER_HOST:-${MUM_SERVER_SLUG}.test}
-MUM_CLIENT_SLUG=${MUM_CLIENT_SLUG:-mum-client-dev-site}
+MUM_SERVER_DB=${MUM_SERVER_DB:-mum_server_$MUM_ENV}
+MUM_CLIENT_SLUG=${MUM_CLIENT_SLUG:-mum-client-$MUM_ENV-site}
 MUM_CLIENT_HOST=${MUM_CLIENT_HOST:-${MUM_CLIENT_SLUG}.test}
+MUM_CLIENT_DB=${MUM_CLIENT_DB:-mum_client_$MUM_ENV}
 MUM_RELEASE_VERSION=${MUM_RELEASE_VERSION:-1.5}
 MUM_CLIENT_VERSION=${MUM_CLIENT_VERSION:-1.4}
 
-SERVER_DIR=$DEVDIR/$MUM_SERVER_SLUG
-CLIENT_DIR=$DEVDIR/$MUM_CLIENT_SLUG
+# The development sites are kept and looked at, so they live where a developer
+# expects them. The tests ones are built again whenever, so they live where
+# nothing is kept -- and are gitignored either way.
+SITES_DIR=$DEVDIR
+[ "$MUM_ENV" = tests ] && SITES_DIR=$BASEDIR/tests/sites
+
+SERVER_DIR=$SITES_DIR/$MUM_SERVER_SLUG
+CLIENT_DIR=$SITES_DIR/$MUM_CLIENT_SLUG
 BUILT_DIR=$BASEDIR/plugins/mum-demo-packages/build/$MUM_SERVER_HOST
 
 # The packages carrying a licence, and what each one is. Named once: the server
