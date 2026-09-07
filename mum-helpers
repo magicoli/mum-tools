@@ -62,6 +62,18 @@ MUM_CLIENT_VERSION=${MUM_CLIENT_VERSION:-1.4}
 # The development sites are kept and looked at, so they live where a developer
 # expects them. The tests ones are built again whenever, so they live where
 # nothing is kept -- and are gitignored either way.
+# Where a site answers. A development one is served by whatever this machine
+# serves sites with, at a name it knows. A tests one is served by PHP itself,
+# when something needs it, on a port picked then -- so there is no address until
+# there is a server, and serve_site fills these in.
+MUM_SERVER_URL=${MUM_SERVER_URL:-}
+MUM_CLIENT_URL=${MUM_CLIENT_URL:-}
+
+if [ "$APP_ENV" = dev ]; then
+	MUM_SERVER_URL=${MUM_SERVER_URL:-https://$MUM_SERVER_HOST}
+	MUM_CLIENT_URL=${MUM_CLIENT_URL:-https://$MUM_CLIENT_HOST}
+fi
+
 SITES_DIR=$DEVDIR
 [ "$APP_ENV" = testing ] && SITES_DIR=$BASEDIR/tests/sites
 
@@ -89,6 +101,44 @@ wp() {
 	WP_CLI_PHP_ARGS="-d memory_limit=${WP_MEMORY_LIMIT:-512M}" \
 		"$BASEDIR/vendor/bin/wp" ${allow_root:+"$allow_root"} "$@"
 }
+
+# The PHP everything here runs on. Named rather than taken from the PATH: on a
+# development machine the first php is often a shim into an entire environment,
+# and a tests run must not need one. .env.testing may say otherwise.
+PHP=${PHP:-php}
+
+# Serve a site with PHP's own built-in server, and stop it when this script
+# ends. What a tests site needs, and a development one never does: something
+# already serves those.
+#
+# The port is asked of the machine rather than picked and hoped for, and the
+# wait is for an answer rather than for the process: the process exists long
+# before the socket does.
+serve_site() {
+	local dir=$1 port url waited
+
+	port=$("$PHP" -r '$s = stream_socket_server( "tcp://127.0.0.1:0" );
+		preg_match( "/:(\d+)$/", stream_socket_get_name( $s, false ), $m );
+		echo $m[1];') || die "could not ask for a free port"
+
+	url=http://127.0.0.1:$port
+
+	MUM_TEST_URL=$url "$PHP" -d memory_limit=512M -S "127.0.0.1:$port" \
+		-t "$dir" "$BASEDIR/vendor/wp-cli/server-command/router.php" \
+		>/dev/null 2>&1 &
+
+	SERVED_PIDS+=($!)
+
+	for waited in $(seq 1 100); do
+		curl -sS --max-time 1 -o /dev/null "$url/" 2>/dev/null && echo "$url" && return 0
+		sleep 0.1
+	done
+
+	die "nothing answered at $url after ten seconds"
+}
+
+SERVED_PIDS=()
+trap '[ ${#SERVED_PIDS[@]} -eq 0 ] || kill ${SERVED_PIDS[@]} 2>/dev/null' EXIT
 
 # Run from inside the site directory: that is how the environment serving it
 # decides which database and which PHP the command gets.
