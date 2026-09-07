@@ -36,8 +36,8 @@ DEVDIR="${DEVDIR:-$BASEDIR/dev}"
 #
 # Everything below is that one word, so the two can never be half-mixed.
 case $APP_ENV in
-	dev | testing) ;;
-	*) die "no such environment: $APP_ENV (dev or testing)" ;;
+dev | testing) ;;
+*) die "no such environment: $APP_ENV (dev or testing)" ;;
 esac
 
 # Laravel calls the environment testing; this project's sites and databases have
@@ -73,7 +73,7 @@ SITES_DIR=$DEVDIR
 
 SERVER_DIR=$SITES_DIR/$MUM_SERVER_SLUG
 CLIENT_DIR=$SITES_DIR/$MUM_CLIENT_SLUG
-BUILT_DIR=$BASEDIR/plugins/mum-demo-packages/build/$MUM_SERVER_HOST
+BUILT_DIR=$BASEDIR/lib/mum-demo-packages/build/$MUM_SERVER_HOST
 
 # The packages carrying a licence, and what each one is. Named once: the server
 # issues the licences, the client presents them, and the two lists have to be
