@@ -111,30 +111,39 @@ PHP=${PHP:-php}
 # ends. What a tests site needs, and a development one never does: something
 # already serves those.
 #
+# The address lands in SERVED_URL rather than on standard output. A command
+# substitution would swallow every message this makes into the caller's
+# variable, and would run the whole thing in a subshell -- where the background
+# server's pid is recorded in a copy of SERVED_PIDS that dies with it, leaving
+# nothing for the trap to stop.
+#
 # The port is asked of the machine rather than picked and hoped for, and the
 # wait is for an answer rather than for the process: the process exists long
 # before the socket does.
 serve_site() {
-	local dir=$1 port url waited
+	local dir=$1 port waited
 
 	port=$("$PHP" -r '$s = stream_socket_server( "tcp://127.0.0.1:0" );
 		preg_match( "/:(\d+)$/", stream_socket_get_name( $s, false ), $m );
 		echo $m[1];') || die "could not ask for a free port"
 
-	url=http://127.0.0.1:$port
+	SERVED_URL=http://127.0.0.1:$port
 
-	MUM_TEST_URL=$url "$PHP" -d memory_limit=512M -S "127.0.0.1:$port" \
+	MUM_TEST_URL=$SERVED_URL "$PHP" -d memory_limit=512M -S "127.0.0.1:$port" \
 		-t "$dir" "$BASEDIR/vendor/wp-cli/server-command/router.php" \
 		>/dev/null 2>&1 &
 
 	SERVED_PIDS+=($!)
 
+	# Waiting for the socket, not for a page: WordPress can take seconds to
+	# answer its first request -- a database across a network makes sure of it --
+	# and a page is not what this needs to know. The server listening is.
 	for waited in $(seq 1 100); do
-		curl -sS --max-time 1 -o /dev/null "$url/" 2>/dev/null && echo "$url" && return 0
+		(exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null && return 0
 		sleep 0.1
 	done
 
-	die "nothing answered at $url after ten seconds"
+	die "nothing listening on $SERVED_URL after ten seconds"
 }
 
 SERVED_PIDS=()
