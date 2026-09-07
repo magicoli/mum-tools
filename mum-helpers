@@ -14,83 +14,167 @@
 	exit 1
 }
 
+PID=$$
+PGM=${PGM:-$(basename "$0")}
 BINDIR="$(cd $(dirname $BASH_SOURCE) && pwd)"
 BASEDIR="${BASEDIR:-$(dirname "$BINDIR")}"
 DEVDIR="${DEVDIR:-$BASEDIR/dev}"
-[ -n "${BASH_HELPERS:-}" ] || source $BINDIR/helpers
+echo ":$PATH:" | grep -q ":$BINDIR:" || export PATH="$BINDIR:$PATH"
 
-# bin/helpers is responsible for loading $BASEDIR/.env
-# other .env files are meant to be loaded by the scripts requiring it, not
-# by these project-wide helpers
+TMP=${TMP:-$(mktemp -t $PGM 2>/dev/null || mktemp -t $PGM.XXXXX 2>/dev/null || echo /tmp/$PGM.$$)}
+LOCK=/tmp/$PGM.lock
+trap 'rm -f $TMP.* $LOCK' EXIT
 
-# Two environments -- dev and testing -- with the same two sites each: a package
-# server and a managed client, which talk to each other and never across.
-#
-#   dev       kept, served however this machine serves sites, and the developer's
-#   testing   rebuilt whenever, served by PHP itself, and nobody's
-#
-# Which one comes from APP_ENV, which bin/helpers read before this file and used
-# to pick the .env to load on top of the default one:
-#
-#   APP_ENV=testing dev/build-dev-sites --clean
-#
-# Everything below is that one word, so the two can never be half-mixed.
-case $APP_ENV in
-dev | testing) ;;
-*) die "no such environment: $APP_ENV (dev or testing)" ;;
-esac
+DEBUG=${DEBUG:-}
 
-# Laravel calls the environment testing; this project's sites and databases have
-# always called it tests. One line, so neither has to give.
-ENV_SUFFIX=$APP_ENV
-[ "$APP_ENV" = testing ] && ENV_SUFFIX=tests
+RED="\033[1;31m"
+GREEN="\033[1;32m"
+YELLOW="\033[1;33m"
+STD="\033[0m"
 
-# -site tells the site apart from the plugin of the same name; -dev and -tests
-# tell the environments apart. Both are needed, and neither replaces the other.
-#
-# .test is what lerd and Herd answer to; another machine serves these somewhere
-# else, and says so in .env rather than being told what its own domains are.
-MUM_SERVER_SLUG=${MUM_SERVER_SLUG:-mum-server-$ENV_SUFFIX-site}
-MUM_SERVER_HOST=${MUM_SERVER_HOST:-${MUM_SERVER_SLUG}.test}
-MUM_SERVER_DB=${MUM_SERVER_DB:-mum_server_$ENV_SUFFIX}
-MUM_CLIENT_SLUG=${MUM_CLIENT_SLUG:-mum-client-$ENV_SUFFIX-site}
-MUM_CLIENT_HOST=${MUM_CLIENT_HOST:-${MUM_CLIENT_SLUG}.test}
-MUM_CLIENT_DB=${MUM_CLIENT_DB:-mum_client_$ENV_SUFFIX}
-MUM_RELEASE_VERSION=${MUM_RELEASE_VERSION:-1.5}
-MUM_CLIENT_VERSION=${MUM_CLIENT_VERSION:-1.4}
+## Generic tools
 
-# The development sites are kept and looked at, so they live where a developer
-# expects them. The tests ones are built again whenever, so they live where
-# nothing is kept -- and are gitignored either way.
-# Where a site answers. Both environments are served the same way -- by whatever
-# this machine serves sites with -- and differ only in the name, which is the
-# whole point of having two.
-MUM_SERVER_URL=${MUM_SERVER_URL:-https://$MUM_SERVER_HOST}
-MUM_CLIENT_URL=${MUM_CLIENT_URL:-https://$MUM_CLIENT_HOST}
+# Utility functions for true/false checking
+is_true() {
+	lower=$(echo "${1:-}" | tr "[:upper:]" "[:lower:]")
+	case "$lower" in
+	yes | y | on | true | 1) return 0 ;;
+	*) return 1 ;;
+	esac
+}
 
-SITES_DIR=$DEVDIR
-[ "$APP_ENV" = testing ] && SITES_DIR=$BASEDIR/tests/sites
+is_false() {
+	lower=$(echo "${1:-}" | tr "[:upper:]" "[:lower:]")
+	case "$lower" in
+	no | n | off | false | 0) return 0 ;;
+	# "") return 0 ;;  # Empty is not false, it's null
+	*) return 1 ;; # Unknown is false
+	esac
+}
 
-SERVER_DIR=$SITES_DIR/$MUM_SERVER_SLUG
-CLIENT_DIR=$SITES_DIR/$MUM_CLIENT_SLUG
-BUILT_DIR=$BASEDIR/lib/mum-demo-packages/build/$MUM_SERVER_HOST
+# Debug checking function
+debug_mode() {
+	is_true "$DEBUG"
+}
 
-# The packages carrying a licence, and what each one is. Named once: the server
-# issues the licences, the client presents them, and the two lists have to be
-# the same list.
-LICENSED_PLUGINS=(dummy-plugin-lib-license)
-LICENSED_THEMES=(dummy-theme-lib-license)
+log() {
+	[ -z "$1" ] && return
+	local append err
 
-# wp-cli, with whatever the caller decided about root. wp-cli refuses to run as
-# root and lerd runs its containers as root; an alias covers that in a terminal
-# and does not survive into a script, so it is asked for rather than assumed.
-allow_root=${allow_root:-}
+	err=$(echo "$1" | grep -E "^[0-9]+$" || true)
+	[ -z "$err" ] || shift
 
-# Memory named here rather than left to whatever php.ini the machine happens to
-# have: unpacking a WordPress needs more than the 128M a stock PHP allows, and
-# it fails as an out-of-memory fatal in the middle of an extract, which reads
-# like anything but a setting. WP_CLI_PHP_ARGS is wp-cli's own way of being
-# told, so no php.ini anywhere has to be edited for this to work.
+	case "$err" in
+	0) COLOR=${GREEN} ;;
+	"") COLOR=${YELLOW} ;;
+	*)
+		COLOR="$RED"
+		append=" ($err)"
+		;;
+	esac
+
+	[ "${1:-}" = "-n" ] && n="-n" && shift || n=
+	[ -n "$*" ] || return
+	printf "${COLOR}%s:${STD} %s\n" "$PGM" "$*${append:-}"
+}
+
+debug() {
+	debug_mode && log "$*"
+}
+
+success() {
+	log 0 "$@"
+}
+
+error() {
+	local err=$(echo "$1" | grep -E "^[0-9]+$" || true)
+	[ -z "$err" ] || shift
+	[ ${err:-0} -ne 0 ] || err=1
+	log ${err:-1} "$*"
+}
+
+end() {
+	local caller_file="${BASH_SOURCE[1]}"
+	local caller_line="${BASH_LINENO[0]}"
+	# err=$(echo "$1" | grep -E "^[1-9][0-9]*$" || true)
+	local err=$(echo "${1:-}" | grep -E "^[0-9]+$" && shift || false)
+	[ -z "$err" ] || shift
+	if [ "$err" -a "$err" != "0" ]; then
+		prefix="[ERROR]"
+		debug_mode && suffix="$caller_file:$caller_line" || suffix=
+	else
+		prefix=
+		suffix=
+	fi
+
+	[ "${1:-}" = "-n" ] && n="-n" && shift || n=
+	local message=${@:-$(debug_mode && echo Finished processing)}
+	log $err $prefix "$message"
+	[ -n "$suffix" ] && echo "  trace: $suffix"
+	exit ${err:-0}
+}
+
+die() {
+	local err=$(echo "$1" | grep -E "^[0-9]+$" || true)
+	[ -z "$err" ] || shift
+	[ ${err:-0} -ne 0 ] || err=1
+	end $err "$@"
+}
+
+yesno() {
+	default=n
+	choice="y/N"
+	[ "$1" = "y" ] && default=y && choice="Y/n" && shift
+	[ "$1" = "-y" ] && default=y && choice="Y/n" && shift
+	[ "$@" ] && message="$@" || message="Answer"
+	message="$message ($choice) "
+	read -u1 -p "$message" answer
+	[ "$answer" = "" ] && answer=$default
+	answer=$(echo "$answer" | tr "[:upper:]" "[:lower:]")
+	[ "$answer" = "y" ] && return 0
+	[ "$answer" = "yes" ] && return 0
+	return 1
+}
+
+readvar() {
+	for var in $@; do
+		varname=$(echo $var | sed "s/\([a-z]\)\([A-Z]\)/\\1 \\2/g")
+		if [ "$AUTOMATIC" = "yes" ]; then
+			echo "$varname: ${!var}"
+		else
+			read -e -p "$varname: " -i "${!var}" $var
+		fi
+	done
+}
+
+get_config() {
+	[ -z "${ENV_PATTERN:-}" ] && log 1 "$(system_message error_env_pattern_missing)" && return 1
+	set | egrep "${ENV_PATTERN:-}" || log 1 "$(system_message error_empty_config)"
+}
+
+usage() {
+	if [ ! "$USAGE" ]; then
+		PAR=$(echo $OPTS | sed 's/.://g' | grep -v "^$" | sed "s/\([a-zA-Z0-9]*\)/[-\1]/g")
+		PAROPT=$(echo $OPTS | sed "s/-://" | sed 's/\(.\)/\1\//g' |
+			sed 's/\(.\)\/:\//[-\1 <value>] /g' |
+			sed "s/.\///g")
+		USAGE=$(echo $PGM $PAR $PAROPT "[...]" | sed "s/  / /g")
+	fi
+	echo "usage: $USAGE"
+}
+
+help() {
+	usage
+	[ -n "${HELP:-}" ] && echo "$HELP"
+}
+
+detailed_help() {
+	cat $BASEDIR/app/doc/help.txt
+	end
+}
+
+## Mum Tools
+
 wp() {
 	WP_CLI_PHP_ARGS="-d memory_limit=${WP_MEMORY_LIMIT:-512M}" \
 		"$BASEDIR/vendor/bin/wp" ${allow_root:+"$allow_root"} "$@"
@@ -99,9 +183,106 @@ wp() {
 # Run from inside the site directory: that is how the environment serving it
 # decides which database and which PHP the command gets.
 wp_server() {
-	cd "$SERVER_DIR" && wp --path="$SERVER_DIR" "$@"
+	cd "$MUM_SERVER_DIR" && wp --path="$MUM_SERVER_DIR" "$@"
 }
 
 wp_client() {
-	cd "$CLIENT_DIR" && wp --path="$CLIENT_DIR" "$@"
+	cd "$MUM_CLIENT_DIR" && wp --path="$MUM_CLIENT_DIR" "$@"
 }
+
+## Read command line arguments
+
+# Default options, may be expanded or overridden in parent script
+OPTS="${OPTS:-htqv}"
+LONGOPTS="${LONGOPTS:+${LONGOPTS},}help,quiet,testing,verbose"
+SYNTAX="${SYNTAX:-$(echo $(
+	echo $OPTS | sed "s/-://g" | sed "s/\(.*\)/[-\\1] [<args>]/g" | sed "s/\(.\):/] [-\\1 <value>/g"
+	echo $LONGOPTS | sed "s/,/] [--/g; s/^/[--/; s/$/]/"
+))}"
+
+USAGE=${USAGE:-$PGM $SYNTAX}
+
+ARGS=()
+for o; do
+	case $o in
+	# -p | --path)
+	# 	debug "opt $o set to $2"
+	# 	;;
+	-h | --help)
+		debug "opt --help"
+		help
+		end
+		;;
+	-q | --quiet)
+		debug "opt --quiet"
+		STDOUT="/dev/null"
+		QUIET=yes
+		DEBUG=no
+		;;
+	-t | --testing)
+		debug "opt --testing"
+		APP_ENV=testing
+		;;
+	-v | --verbose)
+		STDERR="&1"
+		DEBUG=yes
+		debug "opt --verbose"
+		;;
+	*)
+		ARGS+=("$o")
+		;;
+	esac
+done
+
+[ ${ERROR:-} ] && usage && echo && die "$ERROR"
+
+# Back to the script, which parses its own from here. Positional parameters set
+# in a sourced file are the caller's, which is what makes this work at all.
+set -- ${ARGS[@]+"${ARGS[@]}"}
+
+[ "$#" -eq 0 ] || debug "args left for the script: $*"
+
+# And now the environment's own file, which wins over .env. After the options,
+# because --testing is what decides which file that is -- it is not an override
+# like the others, it is the question the others are answered in.
+#
+# No file, nothing to say: .env alone is a complete answer, and dev is the
+# environment that needs none.
+
+## Final setup
+
+APP_ENV=${APP_ENV:-local}
+case $APP_ENV in
+dev)
+	sites_dir=dev
+	;;
+testing | tests)
+	sites_dir=tests/sites
+	;;
+*)
+	sites_dir=builds/sites/$APP_ENV
+	;;
+esac
+
+[ -f "$BASEDIR/.env" ] || log "No .env, using defaults, copy $BASEDIR/.env.example as .env and edit adjust to your needs"
+for env in "$BASEDIR/.env" "$BASEDIR/.env.${APP_ENV}" "$BASEDIR/${APP_ENV}/.env"; do
+	[ -f "$env" ] && source "$env" || true
+done
+
+MUM_SERVER_SLUG=${MUM_SERVER_SLUG:-mum-server}
+MUM_SERVER_HOST=${MUM_SERVER_HOST:-${MUM_SERVER_SLUG}-$APP_ENV}.test}
+MUM_SERVER_URL=${MUM_SERVER_URL:-https://$MUM_SERVER_HOST}
+MUM_SERVER_DB=${MUM_SERVER_DB:-mum_server_$APP_ENV}
+MUM_SERVER_DIR=${MUM_SERVER_DIR:-$sites_dir/$MUM_SERVER_SLUG-$APP_ENV}-site}
+
+MUM_CLIENT_SLUG=${MUM_CLIENT_SLUG:-mum-client}
+MUM_CLIENT_HOST=${MUM_CLIENT_HOST:-${MUM_CLIENT_SLUG}-$APP_ENV}.test}
+MUM_CLIENT_URL=${MUM_CLIENT_URL:-https://$MUM_CLIENT_HOST}
+MUM_CLIENT_DB=${MUM_CLIENT_DB:-mum_client_$APP_ENV}
+MUM_CLIENT_DIR=${MUM_CLIENT_DIR:-$sites_dir/$MUM_CLIENT_SLUG-$APP_ENV}-site}
+
+MUM_DEMO_VERSION=${MUM_DEMO_VERSION:-1.5}
+MUM_RELEASE_VERSION=${MUM_RELEASE_VERSION:-1.5}
+MUM_CLIENT_VERSION=${MUM_CLIENT_VERSION:-1.4}
+
+allow_root=${allow_root:-}
