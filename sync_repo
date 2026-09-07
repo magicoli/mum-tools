@@ -24,22 +24,22 @@ set -u
 PGM=${PGM:-$(basename "$0")}
 BINDIR="$(cd "$(dirname "$0")" && pwd)"
 BASEDIR="${BASEDIR:-$(dirname "$BINDIR")}"
-source "$BINDIR/helpers"
-
+# What --help prints, set before the helpers: acting on --help is theirs.
 USAGE=$(sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^#\{1,2\} \{0,1\}//;1s/^Usage: //')
+
+source "$BINDIR/helpers"
 
 dry_run=
 # --delete by default, so what is there afterwards is the source and nothing
 # else: a file deleted from the source has to disappear from the copy too, or
 # the copy runs code that no longer exists anywhere.
 delete=--delete
-OPTS="hqv"
-LONGOPTS="dry-run,keep,help,quiet,verbose"
+# Added to what bin/helpers declares, so --help still prints the lot. The
+# helpers took their own options out of $@ before this; what is left is ours.
+# Added to what bin/helpers declares, so --help prints the lot. The helpers
+# claimed their own out of $@ before this; what is left is ours.
+LONGOPTS="dry-run,keep,$LONGOPTS"
 
-parsed_opts=$(getopt -o $OPTS -l "$LONGOPTS" -- "$@" 2>$TMP.getopt) || end $? "$USAGE $(
-	echo
-	sed "s/^getopt[\b:]*//" $TMP.getopt
-)"
 for o; do
 	case $o in
 	--dry-run)
@@ -48,21 +48,6 @@ for o; do
 		;;
 	--keep)
 		delete=
-		shift
-		;;
-	-h | --help)
-		help
-		end
-		;;
-	-q | --quiet)
-		STDOUT="/dev/null"
-		QUIET=yes
-		DEBUG=no
-		shift
-		;;
-	-v | --verbose)
-		STDERR="&1"
-		DEBUG=yes
 		shift
 		;;
 	--)

@@ -18,15 +18,6 @@ TMP=${TMP:-$(mktemp -t $PGM 2>/dev/null || mktemp -t $PGM.XXXXX 2>/dev/null || e
 LOCK=/tmp/$PGM.lock
 trap 'rm -f $TMP.* $LOCK' EXIT
 
-OPTS=${OPTS:-hqv}
-LONGOPTS="${LONGOPTS:-help,quiet,verbose}"
-SYNTAX="${SYNTAX:-$(echo $(
-	echo $OPTS | sed "s/-://g" | sed "s/\(.*\)/[-\\1] [<args>]/g" | sed "s/\(.\):/] [-\\1 <value>/g"
-	echo $LONGOPTS | sed "s/,/] [--/g; s/^/[--/; s/$/]/"
-))}"
-
-USAGE=${USAGE:-$PGM $SYNTAX}
-
 DEBUG=${DEBUG:-}
 
 RED="\033[1;31m"
@@ -172,46 +163,84 @@ detailed_help() {
 	end
 }
 
+# Which environment this run is about, the way Laravel takes APP_ENV. Read
+# before anything derives from it -- a script cannot override it in its getopts
+# loop, because by then every name worked out from it is already worked out.
+APP_ENV=${APP_ENV:-dev}
+
 [ -f "$BASEDIR/.env" ] || log "No .env, using defaults, copy $BASEDIR/.env.example as .env and edit adjust to your needs"
 [ -f "$BASEDIR/.env" ] && source "$BASEDIR/.env" || true
 
-if is_true "${OPTSINHELPER:-no}"; then
-	# Parse common args, script-specific args are parsed in the script itself
-	parsed_opts=$(getopt -o $OPTS -l "$LONGOPTS" -- "$@" 2>$TMP.getopt) || end $? "$USAGE $(
-		echo
-		sed "s/^getopt[\b:]*//" $TMP.getopt
-	)"
-	debug "parsed_opts $parsed_opts"
-	for o; do
-		case $o in
-		-p | --path)
-			printf '%s\n' "$o set to $2"
-			shift 2
-			;;
-		-h | --help)
-			help
-			end
-			;;
-		-q | --quiet)
-			STDOUT="/dev/null"
-			QUIET=yes
-			DEBUG=no
-			shift
-			;;
-		-v | --verbose)
-			STDERR="&1"
-			DEBUG=yes
-			shift
-			;;
-		--)
-			shift
-			break
-			;;
-		# (*) log 1 "option $1 not processed by helper $2";
-		esac
-	done
-	# [ "$#" -eq 0 ] || debug "unprocessed args $@"
+OPTS=${OPTS:-htqv}
+LONGOPTS="${LONGOPTS:-help,quiet,testing,verbose}"
+SYNTAX="${SYNTAX:-$(echo $(
+	echo $OPTS | sed "s/-://g" | sed "s/\(.*\)/[-\\1] [<args>]/g" | sed "s/\(.\):/] [-\\1 <value>/g"
+	echo $LONGOPTS | sed "s/,/] [--/g; s/^/[--/; s/$/]/"
+))}"
 
-	[ ${ERROR:-} ] && end $ERROR "$(usage)
-type '$PGM --help' for more info"
+USAGE=${USAGE:-$PGM $SYNTAX}
+
+# if is_true "${OPTSINHELPER:-no}"; then
+# Parse common args, script-specific args are parsed in the script itself
+# parsed_opts=$(getopt -o $OPTS -l "$LONGOPTS" --name "$PGM" -- "$@" 2>$TMP.getopt) || end $? "$USAGE"
+# eval "set -- $parsed_opts"
+# debug "helpers parsed_opts $parsed_opts"
+
+# What this file claims, and what it hands back.
+#
+# No shift in here. This file is sourced, so its shift consumes the *caller's*
+# arguments: the script would then parse an empty $@ and see none of its own
+# options. What is not claimed is collected instead, and given back below.
+ARGS=()
+
+for o; do
+	case $o in
+	# -p | --path)
+	# 	debug "opt $o set to $2"
+	# 	;;
+	-h | --help)
+		debug "opt --help"
+		help
+		end
+		;;
+	-q | --quiet)
+		debug "opt --quiet"
+		STDOUT="/dev/null"
+		QUIET=yes
+		DEBUG=no
+		;;
+	-t | --testing)
+		debug "opt --testing"
+		APP_ENV=testing
+		;;
+	-v | --verbose)
+		STDERR="&1"
+		DEBUG=yes
+		debug "opt --verbose"
+		;;
+	*)
+		ARGS+=("$o")
+		;;
+	esac
+done
+
+# Back to the script, which parses its own from here. Positional parameters set
+# in a sourced file are the caller's, which is what makes this work at all.
+set -- ${ARGS[@]+"${ARGS[@]}"}
+
+[ "$#" -eq 0 ] || debug "args left for the script: $*"
+
+# And now the environment's own file, which wins over .env. After the options,
+# because --testing is what decides which file that is -- it is not an override
+# like the others, it is the question the others are answered in.
+#
+# No file, nothing to say: .env alone is a complete answer, and dev is the
+# environment that needs none.
+if [ -f "$BASEDIR/.env.$APP_ENV" ]; then
+	debug "reading .env.$APP_ENV"
+	source "$BASEDIR/.env.$APP_ENV"
 fi
+
+[ ${ERROR:-} ] && end $ERROR "$(usage)
+type '$PGM --help' for more info"
+# fi

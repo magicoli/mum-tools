@@ -23,44 +23,39 @@ DEVDIR="${DEVDIR:-$BASEDIR/dev}"
 # other .env files are meant to be loaded by the scripts requiring it, not
 # by these project-wide helpers
 
-# Two environments -- dev and tests -- with the same two sites each: a package
+# Two environments -- dev and testing -- with the same two sites each: a package
 # server and a managed client, which talk to each other and never across.
 #
-#   dev     kept, served however this machine serves sites, and the developer's
-#   tests   rebuilt whenever, served by PHP itself, and nobody's
+#   dev       kept, served however this machine serves sites, and the developer's
+#   testing   rebuilt whenever, served by PHP itself, and nobody's
 #
-# Which one a run is about comes from the environment, MUM_ENV, the way Laravel
-# takes APP_ENV: it is what every name and path below is worked out from, so it
-# has to be known before this file is sourced rather than parsed out of the
-# arguments after. Everything below is that one word, so the two environments
-# can never be half-mixed.
+# Which one comes from APP_ENV, which bin/helpers read before this file and used
+# to pick the .env to load on top of the default one:
 #
-#   MUM_ENV=tests dev/build-dev-sites --clean
-MUM_ENV=${MUM_ENV:-dev}
-
-case $MUM_ENV in
-	dev | tests) ;;
-	*) die "no such environment: $MUM_ENV (dev or tests)" ;;
+#   APP_ENV=testing dev/build-dev-sites --clean
+#
+# Everything below is that one word, so the two can never be half-mixed.
+case $APP_ENV in
+	dev | testing) ;;
+	*) die "no such environment: $APP_ENV (dev or testing)" ;;
 esac
 
-# bin/helpers loaded .env, which describes the development environment. The
-# tests one has a file of its own, and what it says wins for a run in tests.
-if [ "$MUM_ENV" = tests ] && [ -f "$BASEDIR/.env.testing" ]; then
-	# shellcheck source=/dev/null
-	source "$BASEDIR/.env.testing"
-fi
+# Laravel calls the environment testing; this project's sites and databases have
+# always called it tests. One line, so neither has to give.
+ENV_SUFFIX=$APP_ENV
+[ "$APP_ENV" = testing ] && ENV_SUFFIX=tests
 
 # -site tells the site apart from the plugin of the same name; -dev and -tests
 # tell the environments apart. Both are needed, and neither replaces the other.
 #
 # .test is what lerd and Herd answer to; another machine serves these somewhere
 # else, and says so in .env rather than being told what its own domains are.
-MUM_SERVER_SLUG=${MUM_SERVER_SLUG:-mum-server-$MUM_ENV-site}
+MUM_SERVER_SLUG=${MUM_SERVER_SLUG:-mum-server-$ENV_SUFFIX-site}
 MUM_SERVER_HOST=${MUM_SERVER_HOST:-${MUM_SERVER_SLUG}.test}
-MUM_SERVER_DB=${MUM_SERVER_DB:-mum_server_$MUM_ENV}
-MUM_CLIENT_SLUG=${MUM_CLIENT_SLUG:-mum-client-$MUM_ENV-site}
+MUM_SERVER_DB=${MUM_SERVER_DB:-mum_server_$ENV_SUFFIX}
+MUM_CLIENT_SLUG=${MUM_CLIENT_SLUG:-mum-client-$ENV_SUFFIX-site}
 MUM_CLIENT_HOST=${MUM_CLIENT_HOST:-${MUM_CLIENT_SLUG}.test}
-MUM_CLIENT_DB=${MUM_CLIENT_DB:-mum_client_$MUM_ENV}
+MUM_CLIENT_DB=${MUM_CLIENT_DB:-mum_client_$ENV_SUFFIX}
 MUM_RELEASE_VERSION=${MUM_RELEASE_VERSION:-1.5}
 MUM_CLIENT_VERSION=${MUM_CLIENT_VERSION:-1.4}
 
@@ -68,7 +63,7 @@ MUM_CLIENT_VERSION=${MUM_CLIENT_VERSION:-1.4}
 # expects them. The tests ones are built again whenever, so they live where
 # nothing is kept -- and are gitignored either way.
 SITES_DIR=$DEVDIR
-[ "$MUM_ENV" = tests ] && SITES_DIR=$BASEDIR/tests/sites
+[ "$APP_ENV" = testing ] && SITES_DIR=$BASEDIR/tests/sites
 
 SERVER_DIR=$SITES_DIR/$MUM_SERVER_SLUG
 CLIENT_DIR=$SITES_DIR/$MUM_CLIENT_SLUG
