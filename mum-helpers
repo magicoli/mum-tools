@@ -115,7 +115,7 @@ end() {
 }
 
 die() {
-	local err=$(echo "$1" | grep -E "^[0-9]+$" || true)
+	local err=$(echo "${1:-}" | grep -E "^[0-9]+$" || true)
 	[ -z "$err" ] || shift
 	[ ${err:-0} -ne 0 ] || err=1
 	end $err "$@"
@@ -145,6 +145,28 @@ readvar() {
 			read -e -p "$varname: " -i "${!var}" $var
 		fi
 	done
+}
+
+update_env() {
+	var=$1
+	shift
+	val="$@"
+	if egrep -q "^[# ]*${var}=($val|\"$val\"|'$val')" $ENV_FILE; then
+		return
+	elif egrep -q "^[# ]*${var}=" $ENV_FILE; then
+		sed -i~ "s/^[# ]*${var}=.*/${var}=${val}/" $ENV_FILE
+		log "  updated ${var} in $ENV_FILE"
+	else
+		echo "${var}=${val}" >>$ENV_FILE
+		log "  added ${var} to $ENV_FILE"
+	fi
+}
+
+ucfirst() {
+	upper=$(echo $@ | cut -c 1 | tr "[:lower:]" "[:upper:]")
+	lower=$(echo $@ | cut -c 2- | tr "[:upper:]" "[:lower:]")
+
+	echo "$upper$lower"
 }
 
 get_config() {
@@ -308,16 +330,16 @@ esac
 debug "APP_ENV ${APP_ENV:-empty} - $BASH_SOURCE:$LINENO"
 
 MUM_SERVER_SLUG=${MUM_SERVER_SLUG:-mum-server}
-MUM_SERVER_HOST=${MUM_SERVER_HOST:-${MUM_SERVER_SLUG}-$APP_ENV}.test
+MUM_SERVER_HOST=${MUM_SERVER_HOST:-${MUM_SERVER_SLUG}-$APP_ENV.test}
 MUM_SERVER_URL=${MUM_SERVER_URL:-https://$MUM_SERVER_HOST}
 MUM_SERVER_DB=${MUM_SERVER_DB:-mum_server_$APP_ENV}
-MUM_SERVER_DIR=${MUM_SERVER_DIR:-$sites_dir/$MUM_SERVER_SLUG-$APP_ENV}-site
+MUM_SERVER_DIR=${MUM_SERVER_DIR:-$sites_dir/$MUM_SERVER_SLUG-$APP_ENV-site}
 
 MUM_CLIENT_SLUG=${MUM_CLIENT_SLUG:-mum-client}
-MUM_CLIENT_HOST=${MUM_CLIENT_HOST:-${MUM_CLIENT_SLUG}-$APP_ENV}.test
+MUM_CLIENT_HOST=${MUM_CLIENT_HOST:-${MUM_CLIENT_SLUG}-$APP_ENV.test}
 MUM_CLIENT_URL=${MUM_CLIENT_URL:-https://$MUM_CLIENT_HOST}
 MUM_CLIENT_DB=${MUM_CLIENT_DB:-mum_client_$APP_ENV}
-MUM_CLIENT_DIR=${MUM_CLIENT_DIR:-$sites_dir/$MUM_CLIENT_SLUG-$APP_ENV}-site
+MUM_CLIENT_DIR=${MUM_CLIENT_DIR:-$sites_dir/$MUM_CLIENT_SLUG-$APP_ENV-site}
 
 MUM_DEMO_VERSION=${MUM_DEMO_VERSION:-1.5}
 MUM_RELEASE_VERSION=${MUM_RELEASE_VERSION:-1.5}
@@ -328,7 +350,7 @@ DB_HOST=${DB_HOST:-localhost}
 DB_NAME=${DB_NAME:-${db_slug}}
 DB_USER=${DB_USER:--${db_slug}}
 DB_PASSWORD=${DB_PASSWORD:-}
-DB_TABLE_PREFIX=${DB_TABLE_PREFIX:-${db_slug}_}
+TABLE_PREFIX=${TABLE_PREFIX:-${db_slug}_}
 DB_CHARSET=${DB_CHARSET:-utf8mb4}
 DB_COLLATE=${DB_COLLATE:-}
 
@@ -345,18 +367,13 @@ ADMIN_EMAIL=${ADMIN_EMAIL:-admin@mum-${APP_ENV}.test}
 GITHUB_TOKEN=${GITHUB_TOKEN:-}
 
 ENV_FILE=$BASEDIR/$(echo .env.${APP_ENV} | sed "s/.local$//")
-for pass_var in ADMIN_PASSWORD DB_PASSWORD MUM_PUSH_KEY; do
-	if [ -z "${!pass_var:-}" ]; then
-		log "${pass_var} not set"
-		echo $pass_var | grep -q "_KEY" && length=32 || length=
-		eval ${pass_var}=$(random_password $length)
-		log "  generated ${!pass_var}"
-		if egrep -q "^[# ]*${pass_var}=" $ENV_FILE; then
-			sed -i~ "s/^[# ]*${pass_var}=.*/${pass_var}=${!pass_var}/" $ENV_FILE
-			log "  updated ${pass_var} in $ENV_FILE"
-		else
-			echo "${pass_var}=${!pass_var}" >>$ENV_FILE
-			log "  added ${pass_var} to $ENV_FILE"
-		fi
+for var in ADMIN_PASSWORD DB_PASSWORD MUM_PUSH_KEY; do
+	if [ -z "${!var:-}" ]; then
+		log "${var} not set"
+		echo $var | grep -q "_KEY" && length=32 || length=
+		val=$(random_password $length)
+		eval ${var}="$val"
+		log "  generated $val"
+		update_env $var "$val"
 	fi
 done
