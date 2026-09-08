@@ -190,17 +190,55 @@ wp_client() {
 	cd "$MUM_CLIENT_DIR" && wp --path="$MUM_CLIENT_DIR" "$@"
 }
 
+random_password() {
+	length=$(echo "${1:-16}" | sed "s/[^0-9]//g" | egrep "^[0-9]+$")
+	[ -n "$length" ] || length=16
+
+	echo $(LC_ALL=C tr -dc "[:alnum:]" </dev/urandom | head -c$length)
+}
+
+debug "APP_ENV ${APP_ENV:-empty} - $BASH_SOURCE:$LINENO"
+APP_ENV=${APP_ENV:-local}
+
+# Preprocess env modifier options
+for o; do
+	case $o in
+	--testing | --tests | --test)
+		debug "opt --testing"
+		APP_ENV=testing
+		;;
+	--prod | --production)
+		debug "opt --production"
+		APP_ENV=production
+		;;
+	--local | --testing | --dev | --production)
+		debug "opt --$o"
+		APP_ENV=${o/--/}
+		;;
+	esac
+done
+
+debug "APP_ENV ${APP_ENV:-empty} - $BASH_SOURCE:$LINENO"
+
+[ -f "$BASEDIR/.env" ] || log "No .env, using defaults, copy $BASEDIR/.env.example as .env and edit adjust to your needs"
+for path in "$BASEDIR" "$BASEDIR/${APP_ENV}"; do
+	[ -f "$path/.env.${APP_ENV}" ] && source "$path/.env.${APP_ENV}" ||
+		[ -f "$path/.env" ] && source "$path/.env" ||
+		true
+done
+
 ## Read command line arguments
 
 # Default options, may be expanded or overridden in parent script
-OPTS="${OPTS:-htqv}"
-LONGOPTS="${LONGOPTS:+${LONGOPTS},}help,quiet,testing,verbose"
+OPTS="${OPTS:-hqv}"
+LONGOPTS="${LONGOPTS:+${LONGOPTS},}testing,dev,help,quiet,verbose"
 SYNTAX="${SYNTAX:-$(echo $(
 	echo $OPTS | sed "s/-://g" | sed "s/\(.*\)/[-\\1] [<args>]/g" | sed "s/\(.\):/] [-\\1 <value>/g"
 	echo $LONGOPTS | sed "s/,/] [--/g; s/^/[--/; s/$/]/"
 ))}"
 
 USAGE=${USAGE:-$PGM $SYNTAX}
+allow_root=
 
 ARGS=()
 for o; do
@@ -219,10 +257,9 @@ for o; do
 		QUIET=yes
 		DEBUG=no
 		;;
-	-t | --testing)
-		debug "opt --testing"
-		APP_ENV=testing
-		;;
+	--testing | --tests | --test) shift ;;
+	--prod | --production) shift ;;
+	--local | --testing | --dev | --production) shift ;;
 	-v | --verbose)
 		STDERR="&1"
 		DEBUG=yes
@@ -251,7 +288,8 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 
 ## Final setup
 
-APP_ENV=${APP_ENV:-local}
+debug "APP_ENV ${APP_ENV:-empty} - $BASH_SOURCE:$LINENO"
+
 case $APP_ENV in
 dev)
 	sites_dir=dev
@@ -259,30 +297,66 @@ dev)
 testing | tests)
 	sites_dir=tests/sites
 	;;
+production | prod)
+	sites_dir=public
+	;;
 *)
 	sites_dir=builds/sites/$APP_ENV
 	;;
 esac
 
-[ -f "$BASEDIR/.env" ] || log "No .env, using defaults, copy $BASEDIR/.env.example as .env and edit adjust to your needs"
-for env in "$BASEDIR/.env" "$BASEDIR/.env.${APP_ENV}" "$BASEDIR/${APP_ENV}/.env"; do
-	[ -f "$env" ] && source "$env" || true
-done
+debug "APP_ENV ${APP_ENV:-empty} - $BASH_SOURCE:$LINENO"
 
 MUM_SERVER_SLUG=${MUM_SERVER_SLUG:-mum-server}
-MUM_SERVER_HOST=${MUM_SERVER_HOST:-${MUM_SERVER_SLUG}-$APP_ENV}.test}
+MUM_SERVER_HOST=${MUM_SERVER_HOST:-${MUM_SERVER_SLUG}-$APP_ENV}.test
 MUM_SERVER_URL=${MUM_SERVER_URL:-https://$MUM_SERVER_HOST}
 MUM_SERVER_DB=${MUM_SERVER_DB:-mum_server_$APP_ENV}
-MUM_SERVER_DIR=${MUM_SERVER_DIR:-$sites_dir/$MUM_SERVER_SLUG-$APP_ENV}-site}
+MUM_SERVER_DIR=${MUM_SERVER_DIR:-$sites_dir/$MUM_SERVER_SLUG-$APP_ENV}-site
 
 MUM_CLIENT_SLUG=${MUM_CLIENT_SLUG:-mum-client}
-MUM_CLIENT_HOST=${MUM_CLIENT_HOST:-${MUM_CLIENT_SLUG}-$APP_ENV}.test}
+MUM_CLIENT_HOST=${MUM_CLIENT_HOST:-${MUM_CLIENT_SLUG}-$APP_ENV}.test
 MUM_CLIENT_URL=${MUM_CLIENT_URL:-https://$MUM_CLIENT_HOST}
 MUM_CLIENT_DB=${MUM_CLIENT_DB:-mum_client_$APP_ENV}
-MUM_CLIENT_DIR=${MUM_CLIENT_DIR:-$sites_dir/$MUM_CLIENT_SLUG-$APP_ENV}-site}
+MUM_CLIENT_DIR=${MUM_CLIENT_DIR:-$sites_dir/$MUM_CLIENT_SLUG-$APP_ENV}-site
 
 MUM_DEMO_VERSION=${MUM_DEMO_VERSION:-1.5}
 MUM_RELEASE_VERSION=${MUM_RELEASE_VERSION:-1.5}
 MUM_CLIENT_VERSION=${MUM_CLIENT_VERSION:-1.4}
 
-allow_root=${allow_root:-}
+db_slug="mum_${APP_ENV}"
+DB_HOST=${DB_HOST:-localhost}
+DB_NAME=${DB_NAME:-${db_slug}}
+DB_USER=${DB_USER:--${db_slug}}
+DB_PASSWORD=${DB_PASSWORD:-}
+DB_TABLE_PREFIX=${DB_TABLE_PREFIX:-${db_slug}_}
+DB_CHARSET=${DB_CHARSET:-utf8mb4}
+DB_COLLATE=${DB_COLLATE:-}
+
+UPDATE_SERVER=${UPDATE_SERVER:-$MUM_SERVER_HOST}
+ACCESS_KEY="(deprecated)"
+MUM_PUSH_KEY_ID=${MUM_PUSH_KEY_ID:-mum_push}
+MUM_PUSH_KEY_ID=UPDATEPULSE_P_${MUM_PUSH_KEY_ID/UPDATEPULSE_P_/}
+MUM_PUSH_KEY=${MUM_PUSH_KEY:-}
+
+ADMIN_USER=${ADMIN_USER:-admin}
+ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+ADMIN_EMAIL=${ADMIN_EMAIL:-admin@mum-${APP_ENV}.test}
+
+GITHUB_TOKEN=${GITHUB_TOKEN:-}
+
+ENV_FILE=$BASEDIR/$(echo .env.${APP_ENV} | sed "s/.local$//")
+for pass_var in ADMIN_PASSWORD DB_PASSWORD MUM_PUSH_KEY; do
+	if [ -z "${!pass_var:-}" ]; then
+		log "${pass_var} not set"
+		echo $pass_var | grep -q "_KEY" && length=32 || length=
+		eval ${pass_var}=$(random_password $length)
+		log "  generated ${!pass_var}"
+		if egrep -q "^[# ]*${pass_var}=" $ENV_FILE; then
+			sed -i~ "s/^[# ]*${pass_var}=.*/${pass_var}=${!pass_var}/" $ENV_FILE
+			log "  updated ${pass_var} in $ENV_FILE"
+		else
+			echo "${pass_var}=${!pass_var}" >>$ENV_FILE
+			log "  added ${pass_var} to $ENV_FILE"
+		fi
+	fi
+done
