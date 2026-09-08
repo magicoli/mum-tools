@@ -16,16 +16,18 @@
 
 PID=$$
 PGM=${PGM:-$(basename "$0")}
+TMP=${TMP:-$(mktemp -t $PGM 2>/dev/null || mktemp -t $PGM.XXXXX 2>/dev/null || echo /tmp/$PGM.$$)}
+LOCK=${LOCK:-~/.$PGM.lock}
+
+trap 'rm -f $TMP.* $LOCK' EXIT
+
 BINDIR="$(cd $(dirname $BASH_SOURCE) && pwd)"
 BASEDIR="${BASEDIR:-$(dirname "$BINDIR")}"
 DEVDIR="${DEVDIR:-$BASEDIR/dev}"
 
-echo ":$PATH:" | grep -q ":$BASEDIR/vendor/bin:" || export PATH="$BASEDIR/vendor/bin:$PATH"
-echo ":$PATH:" | grep -q ":$BINDIR:" || export PATH="$BINDIR:$PATH"
-
-TMP=${TMP:-$(mktemp -t $PGM 2>/dev/null || mktemp -t $PGM.XXXXX 2>/dev/null || echo /tmp/$PGM.$$)}
-LOCK=/tmp/$PGM.lock
-trap 'rm -f $TMP.* $LOCK' EXIT
+for path in "$BASEDIR/vendor/bin" "$BASEDIR/bin" "$BINDIR"; do
+	echo ":$PATH:" | grep -q ":$path:" || export PATH="$path:$PATH"
+done
 
 DEBUG=${DEBUG:-}
 
