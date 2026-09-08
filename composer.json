@@ -1,6 +1,18 @@
 {
   "name": "magicoli/mum-tools",
   "description": "Useful scripts for UpdatePulse server and Magiiic Update Manager",
+  "keywords": [
+    "bash",
+    "shell",
+    "script",
+    "wordpress",
+    "plugin",
+    "updatepulse-server",
+    "wp-packages-update-server",
+    "magiiic-update-manager",
+    "woopus",
+    "mum"
+  ],
   "type": "library",
   "license": "AGPL-3.0-or-later",
   "autoload": {
