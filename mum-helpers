@@ -95,6 +95,7 @@ error() {
 	[ -z "$err" ] || shift
 	[ ${err:-0} -ne 0 ] || err=1
 	log ${err:-1} "$*"
+	return ${err:-1}
 }
 
 end() {
@@ -159,20 +160,24 @@ update_env() {
 	if egrep -q "^[# ]*${var}=($val|\"$val\"|'$val')" $ENV_FILE; then
 		return
 	elif egrep -q "^[# ]*${var}=" $ENV_FILE; then
-		sed -i~ "s/^[# ]*${var}=.*/${var}=${val}/" $ENV_FILE
-		debug "  updated ${var} in $ENV_FILE"
+		sed -i~ "s/^[# ]*${var}=.*/${var}=${val}/" $ENV_FILE &&
+			debug "  updated ${var} in $ENV_FILE" ||
+			error "could update $key in $ENV_FILE"
 	else
-		echo "${var}=${val}" >>$ENV_FILE
-		debug "  added ${var} to $ENV_FILE"
+		echo "${var}=${val}" >>$ENV_FILE &&
+			debug "  added ${var} to $ENV_FILE" ||
+			error "could not add $key to $ENV_FILE"
 	fi
+	return $?
 }
 
 update_env_keys() {
+	errors=0
 	for key in "$@"; do
 		val="${!key}"
 		[ -z "$val" ] && continue
 		update_env "$key" "${!key}" ||
-			die "could not write $key into $here/.env"
+			die "could not write $key in $here/.env or $ENV_FILE"
 	done
 }
 
@@ -225,7 +230,7 @@ wp() {
 # Run from inside the site directory: that is how the environment serving it
 # decides which database and which PHP the command gets.
 wp_server() {
-	cd "$MUM_SERVER_DIR" && wp --path="$MUM_SERVER_DIR" "$@"
+	wp --path="$MUM_SERVER_DIR" "$@"
 }
 
 wp_client() {
@@ -233,8 +238,9 @@ wp_client() {
 }
 
 wp_rewrite_permalinks() {
-	permalink_structure=$(wp option get permalink_structure)
-	wp rewrite structure "$permalink_structure"
+	path=${1:+--path=$1}
+	permalink_structure=$(wp $path option get permalink_structure)
+	wp $path rewrite structure "$permalink_structure"
 }
 
 random_password() {
@@ -394,6 +400,7 @@ DEV_ENV=${DEV_ENV:-}
 WP_CLI=${WP_CLI:-$(which wp)}
 WP_CLI_ALLOW_ROOT=${WP_CLI_ALLOW_ROOT:-false}
 WP_LOCALE=${WP_LOCALE:-}
+# BUILDDIR=${BUILDDIR:-$BASEDIR/build}
 
 ENV_FILE=$BASEDIR/$(echo .env.${APP_ENV} | sed "s/.local$//")
 for var in ADMIN_PASSWORD DB_PASSWORD MUM_PUSH_KEY; do
