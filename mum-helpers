@@ -160,10 +160,10 @@ update_env() {
 		return
 	elif egrep -q "^[# ]*${var}=" $ENV_FILE; then
 		sed -i~ "s/^[# ]*${var}=.*/${var}=${val}/" $ENV_FILE
-		log "  updated ${var} in $ENV_FILE"
+		debug "  updated ${var} in $ENV_FILE"
 	else
 		echo "${var}=${val}" >>$ENV_FILE
-		log "  added ${var} to $ENV_FILE"
+		debug "  added ${var} to $ENV_FILE"
 	fi
 }
 
