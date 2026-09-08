@@ -1,0 +1,23 @@
+{
+  "name": "magicoli/mum-tools",
+  "description": "Useful scripts for UpdatePulse server and Magiiic Update Manager",
+  "type": "library",
+  "license": "AGPL-3.0-or-later",
+  "autoload": {
+    "psr-4": {
+      "Magicoli\\MumTools\\": "src/"
+    }
+  },
+  "authors": [
+    {
+      "name": "Olivier van Helden",
+      "email": "olivier@van-helden.net"
+    }
+  ],
+  "require": {},
+  "bin": [
+    "mum-helpers",
+    "mum-push",
+    "sync_repo"
+  ]
+}
