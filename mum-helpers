@@ -19,6 +19,8 @@ PGM=${PGM:-$(basename "$0")}
 BINDIR="$(cd $(dirname $BASH_SOURCE) && pwd)"
 BASEDIR="${BASEDIR:-$(dirname "$BINDIR")}"
 DEVDIR="${DEVDIR:-$BASEDIR/dev}"
+
+echo ":$PATH:" | grep -q ":$BASEDIR/vendor/bin:" || export PATH="$BASEDIR/vendor/bin:$PATH"
 echo ":$PATH:" | grep -q ":$BINDIR:" || export PATH="$BINDIR:$PATH"
 
 TMP=${TMP:-$(mktemp -t $PGM 2>/dev/null || mktemp -t $PGM.XXXXX 2>/dev/null || echo /tmp/$PGM.$$)}
@@ -151,6 +153,7 @@ update_env() {
 	var=$1
 	shift
 	val="$@"
+	[ -f "$ENV_FILE" ] || touch $ENV_FILE
 	if egrep -q "^[# ]*${var}=($val|\"$val\"|'$val')" $ENV_FILE; then
 		return
 	elif egrep -q "^[# ]*${var}=" $ENV_FILE; then
@@ -160,6 +163,15 @@ update_env() {
 		echo "${var}=${val}" >>$ENV_FILE
 		log "  added ${var} to $ENV_FILE"
 	fi
+}
+
+update_env_keys() {
+	for key in "$@"; do
+		val="${!key}"
+		[ -z "$val" ] && continue
+		update_env "$key" "${!key}" ||
+			die "could not write $key into $here/.env"
+	done
 }
 
 ucfirst() {
@@ -198,8 +210,14 @@ detailed_help() {
 ## Mum Tools
 
 wp() {
-	WP_CLI_PHP_ARGS="-d memory_limit=${WP_MEMORY_LIMIT:-512M}" \
-		"$BASEDIR/vendor/bin/wp" ${allow_root:+"$allow_root"} "$@"
+	is_true ${WP_CLI_ALLOW_ROOT:-} && allow_root="--allow-root"
+	export WP_CLI_PHP_ARGS
+	# log WP_CLI $WP_CLI
+	$WP_CLI ${allow_root:-} "$@"
+	# "$BASEDIR/vendor/bin/wp" ${allow_root:-} "$@"
+
+	# WP_CLI_PHP_ARGS="-d memory_limit=${WP_MEMORY_LIMIT:-512M}" \
+	# 	"$BASEDIR/vendor/bin/wp" ${allow_root:+"$allow_root"} "$@"
 }
 
 # Run from inside the site directory: that is how the environment serving it
@@ -210,6 +228,11 @@ wp_server() {
 
 wp_client() {
 	cd "$MUM_CLIENT_DIR" && wp --path="$MUM_CLIENT_DIR" "$@"
+}
+
+wp_rewrite_permalinks() {
+	permalink_structure=$(wp option get permalink_structure)
+	wp rewrite structure "$permalink_structure"
 }
 
 random_password() {
@@ -260,7 +283,6 @@ SYNTAX="${SYNTAX:-$(echo $(
 ))}"
 
 USAGE=${USAGE:-$PGM $SYNTAX}
-allow_root=
 
 ARGS=()
 for o; do
@@ -350,7 +372,7 @@ DB_HOST=${DB_HOST:-localhost}
 DB_NAME=${DB_NAME:-${db_slug}}
 DB_USER=${DB_USER:--${db_slug}}
 DB_PASSWORD=${DB_PASSWORD:-}
-TABLE_PREFIX=${TABLE_PREFIX:-${db_slug}_}
+DB_TABLE_PREFIX=${DB_TABLE_PREFIX:-${db_slug}_}
 DB_CHARSET=${DB_CHARSET:-utf8mb4}
 DB_COLLATE=${DB_COLLATE:-}
 
@@ -365,6 +387,11 @@ ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
 ADMIN_EMAIL=${ADMIN_EMAIL:-admin@mum-${APP_ENV}.test}
 
 GITHUB_TOKEN=${GITHUB_TOKEN:-}
+STDOUT=${STDOUT:-"&1"}
+DEV_ENV=${DEV_ENV:-}
+WP_CLI=${WP_CLI:-$(which wp)}
+WP_CLI_ALLOW_ROOT=${WP_CLI_ALLOW_ROOT:-false}
+WP_LOCALE=${WP_LOCALE:-}
 
 ENV_FILE=$BASEDIR/$(echo .env.${APP_ENV} | sed "s/.local$//")
 for var in ADMIN_PASSWORD DB_PASSWORD MUM_PUSH_KEY; do
@@ -373,7 +400,7 @@ for var in ADMIN_PASSWORD DB_PASSWORD MUM_PUSH_KEY; do
 		echo $var | grep -q "_KEY" && length=32 || length=
 		val=$(random_password $length)
 		eval ${var}="$val"
-		log "  generated $val"
+		debug "  generated $val"
 		update_env $var "$val"
 	fi
 done
