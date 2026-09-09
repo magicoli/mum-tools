@@ -161,24 +161,26 @@ update_env() {
 		return
 	elif egrep -q "^[# ]*${var}=" $ENV_FILE; then
 		sed -i~ "s/^[# ]*${var}=.*/${var}=${val}/" $ENV_FILE &&
-			debug "  updated ${var} in $ENV_FILE" ||
-			error "could update $key in $ENV_FILE"
+			debug "  updated ${var} in $ENV_FILE" && return ||
+			error "  could update $key in $ENV_FILE"
 	else
 		echo "${var}=${val}" >>$ENV_FILE &&
-			debug "  added ${var} to $ENV_FILE" ||
-			error "could not add $key to $ENV_FILE"
+			debug "  added ${var} to $ENV_FILE" && return ||
+			error "  could not add $key to $ENV_FILE"
 	fi
 	return $?
 }
 
 update_env_keys() {
-	errors=0
+	local errors=0
 	for key in "$@"; do
-		val="${!key}"
+		local val="${!key}"
 		[ -z "$val" ] && continue
-		update_env "$key" "${!key}" ||
-			die "could not write $key in $here/.env or $ENV_FILE"
+		update_env "$key" "${!key}" && continue
+		error "could not store $key in $here/.env or $ENV_FILE"
+		errors=$((errors + 1))
 	done
+	return $errors
 }
 
 ucfirst() {
@@ -212,6 +214,18 @@ help() {
 detailed_help() {
 	cat $BASEDIR/app/doc/help.txt
 	end
+}
+
+countdown() {
+	[ "$1" ] && secs=$1 && shift || secs=5
+	[ "$1" ] && msg=$@ || msg=Countdown
+	while [ $secs -gt 0 ]; do
+		time=$(convertsecs $secs)
+		printf "\r\033[K$msg $time"
+		secs=$(($secs - 1))
+		read -t 1 && return
+	done
+	printf "\r\033[K"
 }
 
 ## Mum Tools
