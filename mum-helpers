@@ -7,7 +7,8 @@
 # they stay describing the same one.
 
 # Make sure we were not launched twice
-[ -n "${MUM_HELPERS:-}" ] && return || MUM_HELPERS=$(realpath "$BASH_SOURCE")
+[ -n "${MUM_HELPERS:-}" ] && return
+MUM_HELPERS=$(realpath "$BASH_SOURCE:-composer")
 
 [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" = "$0" ] && {
 	echo "$(basename "$0") is meant to be sourced, not run" >&2
@@ -161,7 +162,7 @@ update_env() {
 		debug "  no change for ${key}, skipping"
 		return
 	elif egrep -q "^[# ]*${key}=" $ENV_FILE; then
-		sed -i~ "s/^[# ]*${key}=.*/${key}=${value}/" $ENV_FILE &&
+		sed -i~ "s+^[# ]*${key}=.*+${key}=${value}+" $ENV_FILE &&
 			debug "  updated ${key} in $ENV_FILE" &&
 			return ||
 			error "  could update $key in $ENV_FILE"
@@ -178,10 +179,10 @@ update_env_keys() {
 	local errors=0
 	[ -f "$ENV_FILE" ] || touch $ENV_FILE
 	for key in "$@"; do
-		local val="${!key}"
-		[ -z "$val" ] && continue
-		update_env "$key" "${!key}" && continue
-		error "could not store $key in $here/.env or $ENV_FILE"
+		local value="${!key:-}"
+		[ -z "$value" ] && continue
+		update_env "$key" "${value}" && continue
+		error "could not store $key in $ENV_FILE"
 		errors=$((errors + 1))
 	done
 	return $errors
@@ -287,7 +288,7 @@ for o; do
 		debug "opt --production"
 		APP_ENV=production
 		;;
-	--local | --testing | --dev | --production)
+	--local | --dev | --production)
 		debug "opt --$o"
 		APP_ENV=${o/--/}
 		;;
@@ -295,10 +296,12 @@ for o; do
 done
 
 debug "APP_ENV ${APP_ENV:-empty} - $BASH_SOURCE:$LINENO"
+ENV_SUFFIX=${APP_ENV:+.${APP_ENV}}
+[ "$ENV_SUFFIX" = ".local" ] && ENV_SUFFIX= || true
 
 [ -f "$BASEDIR/.env" ] || log "No .env, using defaults, copy $BASEDIR/.env.example as .env and edit adjust to your needs"
 for path in "$BASEDIR" "$BASEDIR/${APP_ENV}"; do
-	[ -f "$path/.env.${APP_ENV}" ] && source "$path/.env.${APP_ENV}" ||
+	[ -f "$path/.env${ENV_SUFFIX}" ] && source "$path/.env${ENV_SUFFIX}" ||
 		[ -f "$path/.env" ] && source "$path/.env" ||
 		true
 done
@@ -376,7 +379,7 @@ production | prod)
 	sites_dir=public
 	;;
 *)
-	sites_dir=builds/sites/$APP_ENV
+	sites_dir=build/$APP_ENV/sites
 	;;
 esac
 
@@ -386,13 +389,15 @@ MUM_SERVER_SLUG=${MUM_SERVER_SLUG:-mum-server}
 MUM_SERVER_HOST=${MUM_SERVER_HOST:-${MUM_SERVER_SLUG}-$APP_ENV.test}
 MUM_SERVER_URL=${MUM_SERVER_URL:-https://$MUM_SERVER_HOST}
 MUM_SERVER_DB=${MUM_SERVER_DB:-mum_server_$APP_ENV}
-MUM_SERVER_DIR=${MUM_SERVER_DIR:-$sites_dir/$MUM_SERVER_SLUG-$APP_ENV-site}
+MUM_SERVER_DIR=${MUM_SERVER_DIR:-$sites_dir/$MUM_SERVER_SLUG-${APP_ENV:-local}-site}
+# MUM_SERVER_DIR=$(realpath "$MUM_SERVER_DIR")
 
 MUM_CLIENT_SLUG=${MUM_CLIENT_SLUG:-mum-client}
 MUM_CLIENT_HOST=${MUM_CLIENT_HOST:-${MUM_CLIENT_SLUG}-$APP_ENV.test}
 MUM_CLIENT_URL=${MUM_CLIENT_URL:-https://$MUM_CLIENT_HOST}
 MUM_CLIENT_DB=${MUM_CLIENT_DB:-mum_client_$APP_ENV}
-MUM_CLIENT_DIR=${MUM_CLIENT_DIR:-$sites_dir/$MUM_CLIENT_SLUG-$APP_ENV-site}
+MUM_CLIENT_DIR=${MUM_CLIENT_DIR:-$sites_dir/$MUM_CLIENT_SLUG-${APP_ENV:-local}-site}
+# MUM_CLIENT_DIR=$(realpath "$MUM_CLIENT_DIR")
 
 MUM_DEMO_VERSION=${MUM_DEMO_VERSION:-1.5}
 MUM_RELEASE_VERSION=${MUM_RELEASE_VERSION:-1.5}
@@ -425,14 +430,6 @@ WP_CLI_ALLOW_ROOT=${WP_CLI_ALLOW_ROOT:-false}
 WP_LOCALE=${WP_LOCALE:-}
 # BUILDDIR=${BUILDDIR:-$BASEDIR/build}
 
-ENV_FILE=$BASEDIR/$(echo .env.${APP_ENV} | sed "s/.local$//")
-for var in ADMIN_PASSWORD DB_PASSWORD MUM_PUSH_KEY; do
-	if [ -z "${!var:-}" ]; then
-		log "${var} not set"
-		echo $var | grep -q "_KEY" && length=32 || length=
-		val=$(random_password $length)
-		eval ${var}="$val"
-		debug "  generated $val"
-		update_env $var "$val"
-	fi
-done
+ENV_FILE=$BASEDIR/$(echo .env${ENV_SUFFIX} | sed "s/.local$//")
+update_env_keys ADMIN_PASSWORD DB_PASSWORD MUM_PUSH_KEY
+update_env_keys MUM_CLIENT_URL MUM_SERVER_DIR MUM_CLIENT_URL MUM_CLIENT_DIR
