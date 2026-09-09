@@ -83,7 +83,7 @@ log() {
 }
 
 debug() {
-	debug_mode && log "$*"
+	debug_mode && log "$*" || true
 }
 
 success() {
@@ -113,7 +113,7 @@ end() {
 	fi
 
 	[ "${1:-}" = "-n" ] && n="-n" && shift || n=
-	local message=${@:-$(debug_mode && echo Finished processing)}
+	local message=${@:-$(debug_mode && echo Finished processing)} || true
 	log $err $prefix "$message"
 	[ -n "$suffix" ] && echo "  trace: $suffix"
 	exit ${err:-0}
@@ -153,19 +153,22 @@ readvar() {
 }
 
 update_env() {
-	var=$1
+	local key=$1
 	shift
-	val="$@"
+	value="$@"
 	[ -f "$ENV_FILE" ] || touch $ENV_FILE
-	if egrep -q "^[# ]*${var}=($val|\"$val\"|'$val')" $ENV_FILE; then
+	if egrep -q "^[# ]*${key}=($value|\"$value\"|'$value')" $ENV_FILE; then
+		debug "  no change for ${key}, skipping"
 		return
-	elif egrep -q "^[# ]*${var}=" $ENV_FILE; then
-		sed -i~ "s/^[# ]*${var}=.*/${var}=${val}/" $ENV_FILE &&
-			debug "  updated ${var} in $ENV_FILE" && return ||
+	elif egrep -q "^[# ]*${key}=" $ENV_FILE; then
+		sed -i~ "s/^[# ]*${key}=.*/${key}=${value}/" $ENV_FILE &&
+			debug "  updated ${key} in $ENV_FILE" &&
+			return ||
 			error "  could update $key in $ENV_FILE"
 	else
-		echo "${var}=${val}" >>$ENV_FILE &&
-			debug "  added ${var} to $ENV_FILE" && return ||
+		echo "${key}=${value}" >>$ENV_FILE &&
+			debug "  added ${key} to $ENV_FILE" &&
+			return ||
 			error "  could not add $key to $ENV_FILE"
 	fi
 	return $?
@@ -173,6 +176,7 @@ update_env() {
 
 update_env_keys() {
 	local errors=0
+	[ -f "$ENV_FILE" ] || touch $ENV_FILE
 	for key in "$@"; do
 		local val="${!key}"
 		[ -z "$val" ] && continue
@@ -216,11 +220,21 @@ detailed_help() {
 	end
 }
 
+readable_time() {
+	d=$(($1 / 86400))
+	[ $d = 1 ] && days="$d day "
+	[ $d -gt 1 ] && days="$d days "
+	h=$(($1 % 86400 / 3600))
+	m=$(($1 % 3600 / 60))
+	s=$(($1 % 60))
+	printf "%s%02d:%02d:%02d\n" "${days:-}" $h $m $s | sed -e "s/^00://g" -e "s/^00:0*\([0-9][0-9]*\)/\\1 seconds/g" -e "s/^[01] seconds/1 second/" -e "s/ 00:00:00$//"
+}
+
 countdown() {
-	[ "$1" ] && secs=$1 && shift || secs=5
-	[ "$1" ] && msg=$@ || msg=Countdown
+	[ -n "$@" ] && secs=$1 && shift || secs=5
+	[ -n "$@" ] && msg=$@ || msg=Countdown
 	while [ $secs -gt 0 ]; do
-		time=$(convertsecs $secs)
+		time=$(readable_time $secs)
 		printf "\r\033[K$msg $time"
 		secs=$(($secs - 1))
 		read -t 1 && return
@@ -232,13 +246,8 @@ countdown() {
 
 wp() {
 	is_true ${WP_CLI_ALLOW_ROOT:-} && allow_root="--allow-root"
-	export WP_CLI_PHP_ARGS
-	# log WP_CLI $WP_CLI
-	$WP_CLI ${allow_root:-} "$@"
-	# "$BASEDIR/vendor/bin/wp" ${allow_root:-} "$@"
 
-	# WP_CLI_PHP_ARGS="-d memory_limit=${WP_MEMORY_LIMIT:-512M}" \
-	# 	"$BASEDIR/vendor/bin/wp" ${allow_root:+"$allow_root"} "$@"
+	"$WP_CLI" ${allow_root:-} "$@"
 }
 
 # Run from inside the site directory: that is how the environment serving it
