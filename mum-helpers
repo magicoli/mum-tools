@@ -8,7 +8,7 @@
 
 # Make sure we were not launched twice
 [ -n "${MUM_HELPERS:-}" ] && return
-MUM_HELPERS=$(realpath "$BASH_SOURCE:-composer")
+MUM_HELPERS=$(realpath "${BASH_SOURCE:-composer}")
 
 [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" = "$0" ] && {
 	echo "$(basename "$0") is meant to be sourced, not run" >&2
@@ -300,10 +300,14 @@ ENV_SUFFIX=${APP_ENV:+.${APP_ENV}}
 [ "$ENV_SUFFIX" = ".local" ] && ENV_SUFFIX= || true
 
 [ -f "$BASEDIR/.env" ] || log "No .env, using defaults, copy $BASEDIR/.env.example as .env and edit adjust to your needs"
+# The base file first and the environment's on top of it: .env carries what
+# every environment shares, .env.$APP_ENV what makes this one itself. Chained
+# with && and || they came out the other way round -- a && b || c && d runs d
+# whenever the first pair succeeded -- so both were read, base last, and .env
+# quietly won every difference.
 for path in "$BASEDIR" "$BASEDIR/${APP_ENV}"; do
-	[ -f "$path/.env${ENV_SUFFIX}" ] && source "$path/.env${ENV_SUFFIX}" ||
-		[ -f "$path/.env" ] && source "$path/.env" ||
-		true
+	[ -f "$path/.env" ] && source "$path/.env" || true
+	[ -n "$ENV_SUFFIX" ] && [ -f "$path/.env${ENV_SUFFIX}" ] && source "$path/.env${ENV_SUFFIX}" || true
 done
 
 ## Read command line arguments
